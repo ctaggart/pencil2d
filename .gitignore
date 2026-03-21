@@ -90,3 +90,5 @@ CMakeCache.txt
 compile_commands.json
 cmake-build-*/
 
+.zig-cache/
+zig-out/
