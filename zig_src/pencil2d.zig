@@ -692,6 +692,81 @@ pub const PixelBuffer = struct {
 
         return .{ .filled = filled, .left = min_x, .top = min_y, .right = max_x, .bottom = max_y };
     }
+
+    /// Composite `src` onto `self` using source-over alpha blending (premultiplied alpha).
+    /// src_x/src_y is the offset of src's top-left relative to self's coordinate space.
+    pub fn compositeOver(self: *PixelBuffer, src: *const PixelBuffer, src_x: i32, src_y: i32) void {
+        const dst_w: i32 = @intCast(self.width);
+        const dst_h: i32 = @intCast(self.height);
+        const src_w: i32 = @intCast(src.width);
+        const src_h: i32 = @intCast(src.height);
+
+        // Clamp iteration bounds
+        const y_start: i32 = @max(0, -src_y);
+        const y_end: i32 = @min(src_h, dst_h - src_y);
+        const x_start: i32 = @max(0, -src_x);
+        const x_end: i32 = @min(src_w, dst_w - src_x);
+
+        var sy = y_start;
+        while (sy < y_end) : (sy += 1) {
+            const dy: u32 = @intCast(sy + src_y);
+            const dst_row = self.scanLine(dy) orelse continue;
+            const src_row = src.constScanLine(@intCast(sy)) orelse continue;
+            var sx = x_start;
+            while (sx < x_end) : (sx += 1) {
+                const dx: u32 = @intCast(sx + src_x);
+                const s = src_row[@intCast(sx)];
+                if (s.a == 0) continue;
+                if (s.a == 255) {
+                    dst_row[dx] = s;
+                } else {
+                    // Premultiplied source-over: dst = src + dst * (1 - src.a)
+                    const d = dst_row[dx];
+                    const inv_a: u16 = 255 - @as(u16, s.a);
+                    dst_row[dx] = .{
+                        .r = @intCast(@as(u16, s.r) + (@as(u16, d.r) * inv_a + 127) / 255),
+                        .g = @intCast(@as(u16, s.g) + (@as(u16, d.g) * inv_a + 127) / 255),
+                        .b = @intCast(@as(u16, s.b) + (@as(u16, d.b) * inv_a + 127) / 255),
+                        .a = @intCast(@as(u16, s.a) + (@as(u16, d.a) * inv_a + 127) / 255),
+                    };
+                }
+            }
+        }
+    }
+
+    /// Fill all non-transparent pixels with a solid color, preserving alpha.
+    /// Equivalent to QPainter::CompositionMode_SourceIn with a solid fill.
+    pub fn fillNonAlpha(self: *PixelBuffer, color: Color) void {
+        for (self.data) |*px| {
+            if (px.a != 0) {
+                // Source-in: result.a = src.a * dst.a / 255
+                const a = (@as(u16, color.a) * @as(u16, px.a) + 127) / 255;
+                px.* = .{
+                    .r = @intCast((@as(u16, color.r) * a + 127) / 255),
+                    .g = @intCast((@as(u16, color.g) * a + 127) / 255),
+                    .b = @intCast((@as(u16, color.b) * a + 127) / 255),
+                    .a = @intCast(a),
+                };
+            }
+        }
+    }
+
+    /// Clear all pixels to transparent.
+    pub fn clear(self: *PixelBuffer) void {
+        @memset(self.data, Color.transparent);
+    }
+
+    /// Clear a rectangular region to transparent.
+    pub fn clearRect(self: *PixelBuffer, rx: u32, ry: u32, rw: u32, rh: u32) void {
+        var y: u32 = ry;
+        while (y < ry + rh and y < self.height) : (y += 1) {
+            const row = self.scanLine(y) orelse continue;
+            var x: u32 = rx;
+            while (x < rx + rw and x < self.width) : (x += 1) {
+                row[x] = Color.transparent;
+            }
+        }
+    }
 };
 
 // ── C ABI for PixelBuffer ────────────────────────────────────────────
@@ -726,6 +801,22 @@ export fn zig_pixbuf_set_pixel(handle: *CPixelBuffer, x: u32, y: u32, argb: u32)
 export fn zig_pixbuf_data_ptr(handle: *CPixelBuffer) [*]u8 {
     const buf: *PixelBuffer = @ptrCast(@alignCast(handle));
     return @ptrCast(buf.data.ptr);
+}
+
+export fn zig_pixbuf_composite_over(dst: *CPixelBuffer, src: *const CPixelBuffer, src_x: c_int, src_y: c_int) void {
+    const dst_buf: *PixelBuffer = @ptrCast(@alignCast(dst));
+    const src_buf: *const PixelBuffer = @ptrCast(@alignCast(src));
+    dst_buf.compositeOver(src_buf, src_x, src_y);
+}
+
+export fn zig_pixbuf_fill_non_alpha(handle: *CPixelBuffer, argb: u32) void {
+    const buf: *PixelBuffer = @ptrCast(@alignCast(handle));
+    buf.fillNonAlpha(Color.fromArgb(argb));
+}
+
+export fn zig_pixbuf_clear(handle: *CPixelBuffer) void {
+    const buf: *PixelBuffer = @ptrCast(@alignCast(handle));
+    buf.clear();
 }
 
 export fn zig_color_distance_sq(a: u32, b_val: u32) u32 {
@@ -946,11 +1037,51 @@ test "PixelBuffer autoCropBounds single pixel" {
 test "PixelBuffer floodFill" {
     var buf = try PixelBuffer.init(std.testing.allocator, 10, 10);
     defer buf.deinit();
-    // Fill entire buffer is transparent (same color), flood fill should cover all
     const result = try buf.floodFill(5, 5, 0);
     defer std.testing.allocator.free(result.filled);
-    // All pixels should be filled since they're all transparent
     var count: usize = 0;
     for (result.filled) |f| { if (f) count += 1; }
     try std.testing.expectEqual(@as(usize, 100), count);
+}
+
+test "PixelBuffer compositeOver" {
+    var dst = try PixelBuffer.init(std.testing.allocator, 4, 4);
+    defer dst.deinit();
+    var src = try PixelBuffer.init(std.testing.allocator, 2, 2);
+    defer src.deinit();
+
+    // Fill dst with opaque white
+    for (dst.data) |*px| px.* = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    // Fill src with semi-transparent red (premultiplied: r=128, a=128)
+    for (src.data) |*px| px.* = .{ .r = 128, .g = 0, .b = 0, .a = 128 };
+
+    dst.compositeOver(&src, 1, 1);
+
+    // Pixel at (0,0) should be unchanged (white)
+    try std.testing.expectEqual(@as(u8, 255), dst.getPixel(0, 0).r);
+    // Pixel at (1,1) should be blended
+    const blended = dst.getPixel(1, 1);
+    try std.testing.expect(blended.r > 128); // red + white background
+    try std.testing.expect(blended.a == 255); // fully opaque result
+}
+
+test "PixelBuffer fillNonAlpha" {
+    var buf = try PixelBuffer.init(std.testing.allocator, 4, 4);
+    defer buf.deinit();
+    buf.setPixel(1, 1, .{ .r = 100, .g = 200, .b = 50, .a = 255 });
+    buf.fillNonAlpha(.{ .r = 255, .g = 0, .b = 0, .a = 255 });
+    // The non-transparent pixel should now be red
+    const px = buf.getPixel(1, 1);
+    try std.testing.expectEqual(@as(u8, 255), px.r);
+    try std.testing.expectEqual(@as(u8, 0), px.g);
+    // Transparent pixels should remain transparent
+    try std.testing.expectEqual(@as(u8, 0), buf.getPixel(0, 0).a);
+}
+
+test "PixelBuffer clear" {
+    var buf = try PixelBuffer.init(std.testing.allocator, 4, 4);
+    defer buf.deinit();
+    buf.setPixel(2, 2, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+    buf.clear();
+    try std.testing.expectEqual(@as(u8, 0), buf.getPixel(2, 2).a);
 }
