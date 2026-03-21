@@ -823,6 +823,62 @@ export fn zig_color_distance_sq(a: u32, b_val: u32) u32 {
     return Color.distanceSq(Color.fromArgb(a), Color.fromArgb(b_val));
 }
 
+// ── Event system (Phase 7) ───────────────────────────────────────────
+// A simple observer/callback system to replace Qt signals/slots for
+// non-UI manager communication. Each event type is a list of callbacks.
+
+pub fn Event(comptime Args: type) type {
+    return struct {
+        const Self = @This();
+        const Callback = *const fn (Args) void;
+
+        callbacks: [max_callbacks]?Callback = .{null} ** max_callbacks,
+        count: usize = 0,
+        const max_callbacks = 16;
+
+        pub fn connect(self: *Self, cb: Callback) void {
+            if (self.count < max_callbacks) {
+                self.callbacks[self.count] = cb;
+                self.count += 1;
+            }
+        }
+
+        pub fn disconnect(self: *Self, cb: Callback) void {
+            var i: usize = 0;
+            while (i < self.count) {
+                if (self.callbacks[i] == cb) {
+                    var j = i;
+                    while (j + 1 < self.count) : (j += 1) {
+                        self.callbacks[j] = self.callbacks[j + 1];
+                    }
+                    self.callbacks[self.count - 1] = null;
+                    self.count -= 1;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        pub fn emit(self: *const Self, args: Args) void {
+            for (0..self.count) |i| {
+                if (self.callbacks[i]) |cb| {
+                    cb(args);
+                }
+            }
+        }
+
+        pub fn disconnectAll(self: *Self) void {
+            for (0..max_callbacks) |i| {
+                self.callbacks[i] = null;
+            }
+            self.count = 0;
+        }
+    };
+}
+
+/// Void event (no arguments)
+pub const VoidEvent = Event(void);
+
 // ── C ABI exports for earlier functions ──────────────────────────────
 
 export fn zig_pointOnCubic(
@@ -1084,4 +1140,46 @@ test "PixelBuffer clear" {
     buf.setPixel(2, 2, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
     buf.clear();
     try std.testing.expectEqual(@as(u8, 0), buf.getPixel(2, 2).a);
+}
+
+test "Event connect and emit" {
+    const IntEvent = Event(i32);
+    var ev: IntEvent = .{};
+    var received: i32 = 0;
+    const handler = struct {
+        var value: i32 = 0;
+        fn callback(v: i32) void { value = v; }
+    };
+    ev.connect(&handler.callback);
+    ev.emit(42);
+    received = handler.value;
+    try std.testing.expectEqual(@as(i32, 42), received);
+}
+
+test "Event disconnect" {
+    const IntEvent = Event(i32);
+    var ev: IntEvent = .{};
+    const handler = struct {
+        var count: i32 = 0;
+        fn callback(_: i32) void { count += 1; }
+    };
+    handler.count = 0;
+    ev.connect(&handler.callback);
+    ev.emit(1);
+    try std.testing.expectEqual(@as(i32, 1), handler.count);
+    ev.disconnect(&handler.callback);
+    ev.emit(2);
+    try std.testing.expectEqual(@as(i32, 1), handler.count); // still 1, disconnected
+}
+
+test "VoidEvent" {
+    var ev: VoidEvent = .{};
+    const handler = struct {
+        var called: bool = false;
+        fn callback(_: void) void { called = true; }
+    };
+    handler.called = false;
+    ev.connect(&handler.callback);
+    ev.emit({});
+    try std.testing.expect(handler.called);
 }
