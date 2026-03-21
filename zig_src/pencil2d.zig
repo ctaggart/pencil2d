@@ -247,8 +247,274 @@ pub fn calculateRelativeOpacityForLayer(current_layer_index: i32, layer_index_ne
     return std.math.pow(f64, @floatCast(threshold), @floatFromInt(absolute_offset));
 }
 
-// ── C ABI exports ────────────────────────────────────────────────────
-// These allow C++ code to call Zig functions.
+// ── Geometry types ───────────────────────────────────────────────────
+
+pub const Point = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+
+    pub fn add(a: Point, b: Point) Point {
+        return .{ .x = a.x + b.x, .y = a.y + b.y };
+    }
+
+    pub fn sub(a: Point, b: Point) Point {
+        return .{ .x = a.x - b.x, .y = a.y - b.y };
+    }
+
+    pub fn scale(p: Point, s: f64) Point {
+        return .{ .x = p.x * s, .y = p.y * s };
+    }
+
+    pub fn lerp(a: Point, b: Point, t: f64) Point {
+        return .{ .x = a.x + (b.x - a.x) * t, .y = a.y + (b.y - a.y) * t };
+    }
+
+    pub fn dot(a: Point, b: Point) f64 {
+        return a.x * b.x + a.y * b.y;
+    }
+
+    /// Euclidean length.
+    pub fn eLength(p: Point) f64 {
+        return @sqrt(p.x * p.x + p.y * p.y);
+    }
+
+    /// Manhattan length. Returns 1.0 if zero to avoid division by zero.
+    pub fn mLength(p: Point) f64 {
+        const result = @abs(p.x) + @abs(p.y);
+        return if (result == 0.0) 1.0 else result;
+    }
+
+    /// Normalize to unit length.
+    pub fn normalized(p: Point) Point {
+        const len = p.eLength();
+        if (len > 1.0e-6) {
+            return .{ .x = p.x / len, .y = p.y / len };
+        }
+        return p;
+    }
+};
+
+pub const Rect = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+    w: f64 = 0,
+    h: f64 = 0,
+};
+
+// ── Bézier curve math (from beziercurve.cpp) ─────────────────────────
+
+pub const bezier = struct {
+    /// Evaluate a point on a cubic Bézier segment at parameter t ∈ [0,1].
+    /// Uses the Bernstein polynomial form: B(t) = (1-t)³P₀ + 3t(1-t)²P₁ + 3t²(1-t)P₂ + t³P₃
+    pub fn pointOnCubic(p0: Point, c1: Point, c2: Point, p1: Point, t: f64) Point {
+        const u = 1.0 - t;
+        const uu = u * u;
+        const t2 = t * t;
+        return .{
+            .x = uu * u * p0.x + 3.0 * t * uu * c1.x + 3.0 * t2 * u * c2.x + t2 * t * p1.x,
+            .y = uu * u * p0.y + 3.0 * t * uu * c1.y + 3.0 * t2 * u * c2.y + t2 * t * p1.y,
+        };
+    }
+
+    /// De Casteljau split: split a cubic at parameter `fraction`, returning
+    /// the control points for the two resulting cubics.
+    pub const SplitResult = struct {
+        // First half: p0 -> cA1 -> cA2 -> mid
+        cA1: Point,
+        cA2: Point,
+        // Second half: mid -> cB1 -> cB2 -> p1
+        cB1: Point,
+        cB2: Point,
+        mid: Point,
+    };
+
+    pub fn splitCubic(p0: Point, c1_in: Point, c2_in: Point, p1: Point, fraction: f64) SplitResult {
+        const c12 = Point.lerp(c1_in, c2_in, fraction);
+        const cA1 = Point.lerp(p0, c1_in, fraction);
+        const cB2 = Point.lerp(c2_in, p1, fraction);
+        const cA2 = Point.lerp(cA1, c12, fraction);
+        const cB1 = Point.lerp(c12, cB2, fraction);
+        const mid = Point.lerp(cA2, cB1, fraction);
+        return .{ .cA1 = cA1, .cA2 = cA2, .cB1 = cB1, .cB2 = cB2, .mid = mid };
+    }
+
+    /// Find the minimum distance from a point P to a cubic Bézier segment,
+    /// sampled at `steps` intervals. Returns distance, nearest point, and parameter t.
+    pub const DistanceResult = struct {
+        distance: f64,
+        nearest: Point,
+        t: f64,
+    };
+
+    pub fn findDistance(p0: Point, c1_pt: Point, c2_pt: Point, p1: Point, target: Point, steps: u32) DistanceResult {
+        var best = DistanceResult{
+            .distance = Point.sub(p0, target).eLength(),
+            .nearest = p0,
+            .t = 0,
+        };
+        const n: f64 = @floatFromInt(steps);
+        for (1..steps + 1) |k| {
+            const s: f64 = @as(f64, @floatFromInt(k)) / n;
+            const q = pointOnCubic(p0, c1_pt, c2_pt, p1, s);
+            const dist = Point.sub(q, target).eLength();
+            if (dist <= best.distance) {
+                best = .{ .distance = dist, .nearest = q, .t = s };
+            }
+        }
+        return best;
+    }
+
+    /// Douglas-Peucker polyline simplification.
+    /// Sets `keep[i] = true` for points that should be kept.
+    pub fn simplify(tolerance: f64, points: []const Point, j: usize, k: usize, keep: []bool) void {
+        if (k <= j + 1) return;
+
+        var maxd: f64 = 0.0;
+        var maxi: usize = j;
+
+        const pj = points[j];
+        const pk = points[k];
+        const vjk = Point.sub(pj, pk);
+        const dv_sq = Point.dot(vjk, vjk);
+
+        var i = j + 1;
+        while (i < k) : (i += 1) {
+            const vij = Point.sub(points[i], pj);
+            var d: f64 = undefined;
+            if (dv_sq != 0.0) {
+                const proj = Point.dot(vij, vjk);
+                d = @sqrt(Point.dot(vij, vij) - (proj * proj) / dv_sq);
+            } else {
+                d = vij.eLength();
+            }
+            if (d >= maxd) {
+                maxd = d;
+                maxi = i;
+            }
+        }
+
+        if (maxd >= tolerance) {
+            keep[maxi] = true;
+            simplify(tolerance, points, j, maxi, keep);
+            simplify(tolerance, points, maxi, k, keep);
+        }
+    }
+};
+
+// ── Transform math (from transform.cpp) ──────────────────────────────
+// 2D affine transformation matrix [m11 m12 m13; m21 m22 m23; m31 m32 m33]
+
+pub const Matrix = struct {
+    m: [3][3]f64 = .{
+        .{ 1, 0, 0 },
+        .{ 0, 1, 0 },
+        .{ 0, 0, 1 },
+    },
+
+    pub fn identity() Matrix {
+        return .{};
+    }
+
+    /// Transform a point by this matrix.
+    pub fn mapPoint(self: Matrix, p: Point) Point {
+        const w = self.m[0][2] * p.x + self.m[1][2] * p.y + self.m[2][2];
+        return .{
+            .x = (self.m[0][0] * p.x + self.m[1][0] * p.y + self.m[2][0]) / w,
+            .y = (self.m[0][1] * p.x + self.m[1][1] * p.y + self.m[2][1]) / w,
+        };
+    }
+
+    /// Multiply two matrices.
+    pub fn multiply(a: Matrix, b: Matrix) Matrix {
+        var result: Matrix = undefined;
+        for (0..3) |row| {
+            for (0..3) |col| {
+                result.m[row][col] = a.m[row][0] * b.m[0][col] +
+                    a.m[row][1] * b.m[1][col] +
+                    a.m[row][2] * b.m[2][col];
+            }
+        }
+        return result;
+    }
+
+    /// Compute the inverse of this matrix. Returns identity if singular.
+    pub fn inverted(self: Matrix) Matrix {
+        const det = self.m[0][0] * (self.m[1][1] * self.m[2][2] - self.m[1][2] * self.m[2][1]) -
+            self.m[0][1] * (self.m[1][0] * self.m[2][2] - self.m[1][2] * self.m[2][0]) +
+            self.m[0][2] * (self.m[1][0] * self.m[2][1] - self.m[1][1] * self.m[2][0]);
+        if (@abs(det) < 1e-12) return identity();
+        const inv_det = 1.0 / det;
+        var result: Matrix = undefined;
+        result.m[0][0] = (self.m[1][1] * self.m[2][2] - self.m[1][2] * self.m[2][1]) * inv_det;
+        result.m[0][1] = (self.m[0][2] * self.m[2][1] - self.m[0][1] * self.m[2][2]) * inv_det;
+        result.m[0][2] = (self.m[0][1] * self.m[1][2] - self.m[0][2] * self.m[1][1]) * inv_det;
+        result.m[1][0] = (self.m[1][2] * self.m[2][0] - self.m[1][0] * self.m[2][2]) * inv_det;
+        result.m[1][1] = (self.m[0][0] * self.m[2][2] - self.m[0][2] * self.m[2][0]) * inv_det;
+        result.m[1][2] = (self.m[0][2] * self.m[1][0] - self.m[0][0] * self.m[1][2]) * inv_det;
+        result.m[2][0] = (self.m[1][0] * self.m[2][1] - self.m[1][1] * self.m[2][0]) * inv_det;
+        result.m[2][1] = (self.m[0][1] * self.m[2][0] - self.m[0][0] * self.m[2][1]) * inv_det;
+        result.m[2][2] = (self.m[0][0] * self.m[1][1] - self.m[0][1] * self.m[1][0]) * inv_det;
+        return result;
+    }
+
+    /// Map a rect through the inverse of this matrix.
+    pub fn mapFromLocalRect(self: Matrix, rect: Rect) Rect {
+        const inv = self.inverted();
+        const tl = inv.mapPoint(.{ .x = rect.x, .y = rect.y });
+        const tr = inv.mapPoint(.{ .x = rect.x + rect.w, .y = rect.y });
+        const bl = inv.mapPoint(.{ .x = rect.x, .y = rect.y + rect.h });
+        const br = inv.mapPoint(.{ .x = rect.x + rect.w, .y = rect.y + rect.h });
+        const min_x = @min(@min(tl.x, tr.x), @min(bl.x, br.x));
+        const min_y = @min(@min(tl.y, tr.y), @min(bl.y, br.y));
+        const max_x = @max(@max(tl.x, tr.x), @max(bl.x, br.x));
+        const max_y = @max(@max(tl.y, tr.y), @max(bl.y, br.y));
+        return .{ .x = min_x, .y = min_y, .w = max_x - min_x, .h = max_y - min_y };
+    }
+
+    /// Map a point through the inverse then through a world transform.
+    pub fn mapToWorldPoint(self: Matrix, world: Matrix, p: Point) Point {
+        return world.mapPoint(self.inverted().mapPoint(p));
+    }
+
+    /// Map a rect through the inverse then through a world transform.
+    pub fn mapToWorldRect(self: Matrix, world: Matrix, rect: Rect) Rect {
+        const local = self.mapFromLocalRect(rect);
+        const tl = world.mapPoint(.{ .x = local.x, .y = local.y });
+        const tr = world.mapPoint(.{ .x = local.x + local.w, .y = local.y });
+        const bl = world.mapPoint(.{ .x = local.x, .y = local.y + local.h });
+        const br = world.mapPoint(.{ .x = local.x + local.w, .y = local.y + local.h });
+        const min_x = @min(@min(tl.x, tr.x), @min(bl.x, br.x));
+        const min_y = @min(@min(tl.y, tr.y), @min(bl.y, br.y));
+        const max_x = @max(@max(tl.x, tr.x), @max(bl.x, br.x));
+        const max_y = @max(@max(tl.y, tr.y), @max(bl.y, br.y));
+        return .{ .x = min_x, .y = min_y, .w = max_x - min_x, .h = max_y - min_y };
+    }
+};
+
+// ── C ABI exports for new functions ──────────────────────────────────
+
+export fn zig_pointOnCubic(
+    p0x: f64, p0y: f64, c1x: f64, c1y: f64,
+    c2x: f64, c2y: f64, p1x: f64, p1y: f64,
+    t: f64, out_x: *f64, out_y: *f64,
+) void {
+    const result = bezier.pointOnCubic(
+        .{ .x = p0x, .y = p0y }, .{ .x = c1x, .y = c1y },
+        .{ .x = c2x, .y = c2y }, .{ .x = p1x, .y = p1y }, t,
+    );
+    out_x.* = result.x;
+    out_y.* = result.y;
+}
+
+export fn zig_eLength(x: f64, y: f64) f64 {
+    return (Point{ .x = x, .y = y }).eLength();
+}
+
+export fn zig_mLength(x: f64, y: f64) f64 {
+    return (Point{ .x = x, .y = y }).mLength();
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
 
 export fn zig_getDifferenceAngle(ax: f64, ay: f64, bx: f64, by: f64) f64 {
     return math.getDifferenceAngle(ax, ay, bx, by);
@@ -313,4 +579,85 @@ test "calculateRelativeOpacityForLayer offset 1" {
 test "calculateRelativeOpacityForLayer offset 2" {
     const opacity = calculateRelativeOpacityForLayer(3, 5, 0.5);
     try std.testing.expectApproxEqAbs(0.25, opacity, 1e-10);
+}
+
+test "Point eLength" {
+    const p = Point{ .x = 3, .y = 4 };
+    try std.testing.expectApproxEqAbs(5.0, p.eLength(), 1e-10);
+}
+
+test "Point mLength" {
+    const p = Point{ .x = 3, .y = -4 };
+    try std.testing.expectApproxEqAbs(7.0, p.mLength(), 1e-10);
+}
+
+test "bezier pointOnCubic endpoints" {
+    const p0 = Point{ .x = 0, .y = 0 };
+    const c1 = Point{ .x = 1, .y = 2 };
+    const c2 = Point{ .x = 3, .y = 2 };
+    const p1 = Point{ .x = 4, .y = 0 };
+    const start = bezier.pointOnCubic(p0, c1, c2, p1, 0.0);
+    try std.testing.expectApproxEqAbs(0.0, start.x, 1e-10);
+    try std.testing.expectApproxEqAbs(0.0, start.y, 1e-10);
+    const end = bezier.pointOnCubic(p0, c1, c2, p1, 1.0);
+    try std.testing.expectApproxEqAbs(4.0, end.x, 1e-10);
+    try std.testing.expectApproxEqAbs(0.0, end.y, 1e-10);
+}
+
+test "bezier splitCubic midpoint" {
+    const p0 = Point{ .x = 0, .y = 0 };
+    const c1 = Point{ .x = 0, .y = 2 };
+    const c2 = Point{ .x = 2, .y = 2 };
+    const p1 = Point{ .x = 2, .y = 0 };
+    const result = bezier.splitCubic(p0, c1, c2, p1, 0.5);
+    // The midpoint should be on the curve at t=0.5
+    const expected = bezier.pointOnCubic(p0, c1, c2, p1, 0.5);
+    try std.testing.expectApproxEqAbs(expected.x, result.mid.x, 1e-10);
+    try std.testing.expectApproxEqAbs(expected.y, result.mid.y, 1e-10);
+}
+
+test "bezier findDistance" {
+    const p0 = Point{ .x = 0, .y = 0 };
+    const c1 = Point{ .x = 1, .y = 2 };
+    const c2 = Point{ .x = 3, .y = 2 };
+    const p1 = Point{ .x = 4, .y = 0 };
+    // Distance from a point on the curve should be ~0
+    const on_curve = bezier.pointOnCubic(p0, c1, c2, p1, 0.5);
+    const result = bezier.findDistance(p0, c1, c2, p1, on_curve, 100);
+    try std.testing.expect(result.distance < 0.05);
+}
+
+test "bezier simplify" {
+    // Collinear points should be simplified away
+    const points = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 1, .y = 0 },
+        .{ .x = 2, .y = 0 },
+        .{ .x = 3, .y = 0 },
+        .{ .x = 4, .y = 0 },
+    };
+    var keep = [_]bool{ true, false, false, false, true };
+    bezier.simplify(0.1, &points, 0, 4, &keep);
+    // Interior collinear points should NOT be marked (distance is 0 < tolerance)
+    try std.testing.expect(!keep[1]);
+    try std.testing.expect(!keep[2]);
+    try std.testing.expect(!keep[3]);
+}
+
+test "Matrix identity mapPoint" {
+    const m = Matrix.identity();
+    const p = m.mapPoint(.{ .x = 3, .y = 7 });
+    try std.testing.expectApproxEqAbs(3.0, p.x, 1e-10);
+    try std.testing.expectApproxEqAbs(7.0, p.y, 1e-10);
+}
+
+test "Matrix inverted" {
+    // Scale 2x matrix
+    var m = Matrix.identity();
+    m.m[0][0] = 2;
+    m.m[1][1] = 2;
+    const inv = m.inverted();
+    const p = inv.mapPoint(.{ .x = 4, .y = 6 });
+    try std.testing.expectApproxEqAbs(2.0, p.x, 1e-10);
+    try std.testing.expectApproxEqAbs(3.0, p.y, 1e-10);
 }
