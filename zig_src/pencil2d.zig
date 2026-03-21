@@ -491,7 +491,248 @@ pub const Matrix = struct {
     }
 };
 
-// ── C ABI exports for new functions ──────────────────────────────────
+// ── Pixel buffer (Phase 6) ───────────────────────────────────────────
+// ARGB32 premultiplied pixel buffer, matching Qt's QImage::Format_ARGB32_Premultiplied.
+// Pixel layout: 0xAARRGGBB (native u32, little-endian bytes: BB GG RR AA)
+
+pub const Color = packed struct {
+    b: u8,
+    g: u8,
+    r: u8,
+    a: u8,
+
+    pub const transparent = Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+    pub fn fromArgb(argb: u32) Color {
+        return @bitCast(argb);
+    }
+
+    pub fn toArgb(self: Color) u32 {
+        return @bitCast(self);
+    }
+
+    /// Squared Euclidean color distance (for flood-fill tolerance).
+    pub fn distanceSq(a: Color, b_col: Color) u32 {
+        const dr: i32 = @as(i32, a.r) - @as(i32, b_col.r);
+        const dg: i32 = @as(i32, a.g) - @as(i32, b_col.g);
+        const db: i32 = @as(i32, a.b) - @as(i32, b_col.b);
+        const da: i32 = @as(i32, a.a) - @as(i32, b_col.a);
+        return @intCast(dr * dr + dg * dg + db * db + da * da);
+    }
+};
+
+pub const PixelBuffer = struct {
+    data: []Color,
+    width: u32,
+    height: u32,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !PixelBuffer {
+        const pixels = try allocator.alloc(Color, @as(usize, width) * height);
+        @memset(pixels, Color.transparent);
+        return .{ .data = pixels, .width = width, .height = height, .allocator = allocator };
+    }
+
+    pub fn deinit(self: *PixelBuffer) void {
+        self.allocator.free(self.data);
+    }
+
+    pub fn getPixel(self: *const PixelBuffer, x: u32, y: u32) Color {
+        if (x >= self.width or y >= self.height) return Color.transparent;
+        return self.data[@as(usize, y) * self.width + x];
+    }
+
+    pub fn setPixel(self: *PixelBuffer, x: u32, y: u32, color: Color) void {
+        if (x >= self.width or y >= self.height) return;
+        self.data[@as(usize, y) * self.width + x] = color;
+    }
+
+    /// Get a pointer to a scanline row.
+    pub fn scanLine(self: *PixelBuffer, y: u32) ?[]Color {
+        if (y >= self.height) return null;
+        const start = @as(usize, y) * self.width;
+        return self.data[start .. start + self.width];
+    }
+
+    pub fn constScanLine(self: *const PixelBuffer, y: u32) ?[]const Color {
+        if (y >= self.height) return null;
+        const start = @as(usize, y) * self.width;
+        return self.data[start .. start + self.width];
+    }
+
+    /// Find the tight bounding box of non-transparent pixels.
+    /// Returns null if the buffer is entirely transparent.
+    pub fn autoCropBounds(self: *const PixelBuffer) ?struct { left: u32, top: u32, right: u32, bottom: u32 } {
+        var top: u32 = 0;
+        var bottom: u32 = self.height;
+
+        // Scan from top
+        while (top < self.height) : (top += 1) {
+            const row = self.constScanLine(top).?;
+            var has_content = false;
+            for (row) |px| {
+                if (px.a != 0) { has_content = true; break; }
+            }
+            if (has_content) break;
+        }
+        if (top >= self.height) return null; // entirely transparent
+
+        // Scan from bottom
+        bottom = self.height - 1;
+        while (bottom > top) : (bottom -= 1) {
+            const row = self.constScanLine(bottom).?;
+            var has_content = false;
+            for (row) |px| {
+                if (px.a != 0) { has_content = true; break; }
+            }
+            if (has_content) break;
+        }
+
+        // Scan columns
+        var left: u32 = self.width;
+        var right: u32 = 0;
+        var y = top;
+        while (y <= bottom) : (y += 1) {
+            const row = self.constScanLine(y).?;
+            for (0..self.width) |col_usize| {
+                const col: u32 = @intCast(col_usize);
+                if (row[col_usize].a != 0) {
+                    if (col < left) left = col;
+                    if (col > right) right = col;
+                }
+            }
+        }
+
+        return .{ .left = left, .top = top, .right = right, .bottom = bottom };
+    }
+
+    /// Scanline flood fill. Returns a bool buffer of filled pixels and the fill bounds.
+    pub fn floodFill(
+        self: *const PixelBuffer,
+        start_x: u32,
+        start_y: u32,
+        tolerance_sq: u32,
+    ) !struct { filled: []bool, left: u32, top: u32, right: u32, bottom: u32 } {
+        const w = self.width;
+        const h = self.height;
+        const total = @as(usize, w) * h;
+        const filled = try self.allocator.alloc(bool, total);
+        @memset(filled, false);
+
+        const old_color = self.getPixel(start_x, start_y);
+
+        const QueueItem = struct { x: u32, y: u32 };
+        var queue_buf = try self.allocator.alloc(QueueItem, total);
+        defer self.allocator.free(queue_buf);
+        var queue_head: usize = 0;
+        var queue_tail: usize = 0;
+        queue_buf[queue_tail] = .{ .x = start_x, .y = start_y };
+        queue_tail += 1;
+
+        var min_x: u32 = start_x;
+        var min_y: u32 = start_y;
+        var max_x: u32 = start_x;
+        var max_y: u32 = start_y;
+
+        while (queue_head < queue_tail) {
+            const pt = queue_buf[queue_head];
+            queue_head += 1;
+            const idx = @as(usize, pt.y) * w + pt.x;
+            if (filled[idx]) continue;
+
+            // Scan left
+            var x_left: u32 = pt.x;
+            while (x_left > 0 and Color.distanceSq(self.getPixel(x_left - 1, pt.y), old_color) <= tolerance_sq) {
+                x_left -= 1;
+            }
+
+            // Scan right and fill
+            var x_cur = x_left;
+            var span_up = false;
+            var span_down = false;
+
+            while (x_cur < w and Color.distanceSq(self.getPixel(x_cur, pt.y), old_color) <= tolerance_sq) {
+                const cur_idx = @as(usize, pt.y) * w + x_cur;
+                filled[cur_idx] = true;
+
+                if (x_cur < min_x) min_x = x_cur;
+                if (x_cur > max_x) max_x = x_cur;
+                if (pt.y < min_y) min_y = pt.y;
+                if (pt.y > max_y) max_y = pt.y;
+
+                // Check above
+                if (pt.y > 0) {
+                    const above_idx = @as(usize, pt.y - 1) * w + x_cur;
+                    const matches = Color.distanceSq(self.getPixel(x_cur, pt.y - 1), old_color) <= tolerance_sq;
+                    if (!span_up and matches and !filled[above_idx]) {
+                        queue_buf[queue_tail] = .{ .x = x_cur, .y = pt.y - 1 };
+                        queue_tail += 1;
+                        span_up = true;
+                    } else if (span_up and !matches) {
+                        span_up = false;
+                    }
+                }
+
+                // Check below
+                if (pt.y + 1 < h) {
+                    const below_idx = @as(usize, pt.y + 1) * w + x_cur;
+                    const matches = Color.distanceSq(self.getPixel(x_cur, pt.y + 1), old_color) <= tolerance_sq;
+                    if (!span_down and matches and !filled[below_idx]) {
+                        queue_buf[queue_tail] = .{ .x = x_cur, .y = pt.y + 1 };
+                        queue_tail += 1;
+                        span_down = true;
+                    } else if (span_down and !matches) {
+                        span_down = false;
+                    }
+                }
+
+                x_cur += 1;
+            }
+        }
+
+        return .{ .filled = filled, .left = min_x, .top = min_y, .right = max_x, .bottom = max_y };
+    }
+};
+
+// ── C ABI for PixelBuffer ────────────────────────────────────────────
+
+const CPixelBuffer = opaque {};
+
+export fn zig_pixbuf_create(width: u32, height: u32) ?*CPixelBuffer {
+    const buf = std.heap.page_allocator.create(PixelBuffer) catch return null;
+    buf.* = PixelBuffer.init(std.heap.page_allocator, width, height) catch {
+        std.heap.page_allocator.destroy(buf);
+        return null;
+    };
+    return @ptrCast(buf);
+}
+
+export fn zig_pixbuf_destroy(handle: *CPixelBuffer) void {
+    const buf: *PixelBuffer = @ptrCast(@alignCast(handle));
+    buf.deinit();
+    std.heap.page_allocator.destroy(buf);
+}
+
+export fn zig_pixbuf_get_pixel(handle: *const CPixelBuffer, x: u32, y: u32) u32 {
+    const buf: *const PixelBuffer = @ptrCast(@alignCast(handle));
+    return buf.getPixel(x, y).toArgb();
+}
+
+export fn zig_pixbuf_set_pixel(handle: *CPixelBuffer, x: u32, y: u32, argb: u32) void {
+    const buf: *PixelBuffer = @ptrCast(@alignCast(handle));
+    buf.setPixel(x, y, Color.fromArgb(argb));
+}
+
+export fn zig_pixbuf_data_ptr(handle: *CPixelBuffer) [*]u8 {
+    const buf: *PixelBuffer = @ptrCast(@alignCast(handle));
+    return @ptrCast(buf.data.ptr);
+}
+
+export fn zig_color_distance_sq(a: u32, b_val: u32) u32 {
+    return Color.distanceSq(Color.fromArgb(a), Color.fromArgb(b_val));
+}
+
+// ── C ABI exports for earlier functions ──────────────────────────────
 
 export fn zig_pointOnCubic(
     p0x: f64, p0y: f64, c1x: f64, c1y: f64,
@@ -660,4 +901,56 @@ test "Matrix inverted" {
     const p = inv.mapPoint(.{ .x = 4, .y = 6 });
     try std.testing.expectApproxEqAbs(2.0, p.x, 1e-10);
     try std.testing.expectApproxEqAbs(3.0, p.y, 1e-10);
+}
+
+test "Color roundtrip" {
+    const c = Color{ .r = 255, .g = 128, .b = 64, .a = 200 };
+    const argb = c.toArgb();
+    const c2 = Color.fromArgb(argb);
+    try std.testing.expectEqual(c.r, c2.r);
+    try std.testing.expectEqual(c.g, c2.g);
+    try std.testing.expectEqual(c.b, c2.b);
+    try std.testing.expectEqual(c.a, c2.a);
+}
+
+test "Color distanceSq identical" {
+    const c = Color{ .r = 100, .g = 150, .b = 200, .a = 255 };
+    try std.testing.expectEqual(@as(u32, 0), Color.distanceSq(c, c));
+}
+
+test "PixelBuffer create and access" {
+    var buf = try PixelBuffer.init(std.testing.allocator, 10, 10);
+    defer buf.deinit();
+    try std.testing.expectEqual(Color.transparent, buf.getPixel(5, 5));
+    buf.setPixel(5, 5, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+    try std.testing.expectEqual(@as(u8, 255), buf.getPixel(5, 5).r);
+}
+
+test "PixelBuffer autoCropBounds empty" {
+    var buf = try PixelBuffer.init(std.testing.allocator, 10, 10);
+    defer buf.deinit();
+    try std.testing.expect(buf.autoCropBounds() == null);
+}
+
+test "PixelBuffer autoCropBounds single pixel" {
+    var buf = try PixelBuffer.init(std.testing.allocator, 10, 10);
+    defer buf.deinit();
+    buf.setPixel(3, 7, .{ .r = 255, .g = 0, .b = 0, .a = 255 });
+    const bounds = buf.autoCropBounds().?;
+    try std.testing.expectEqual(@as(u32, 3), bounds.left);
+    try std.testing.expectEqual(@as(u32, 7), bounds.top);
+    try std.testing.expectEqual(@as(u32, 3), bounds.right);
+    try std.testing.expectEqual(@as(u32, 7), bounds.bottom);
+}
+
+test "PixelBuffer floodFill" {
+    var buf = try PixelBuffer.init(std.testing.allocator, 10, 10);
+    defer buf.deinit();
+    // Fill entire buffer is transparent (same color), flood fill should cover all
+    const result = try buf.floodFill(5, 5, 0);
+    defer std.testing.allocator.free(result.filled);
+    // All pixels should be filled since they're all transparent
+    var count: usize = 0;
+    for (result.filled) |f| { if (f) count += 1; }
+    try std.testing.expectEqual(@as(usize, 100), count);
 }
