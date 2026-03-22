@@ -199,17 +199,29 @@ pub fn validateZip(io: Io, path: []const u8) !void {
 
 const CZipWriter = opaque {};
 
-export fn zig_zip_writer_init(path: [*:0]const u8) ?*CZipWriter {
-    return initWriter(path) catch null;
+fn getIo() Io {
+    if (@import("builtin").is_test) {
+        return std.testing.io;
+    }
+    // For non-test builds, use a thread-local Threaded Io instance
+    const S = struct {
+        threadlocal var instance: ?Io.Threaded = null;
+        fn get() Io {
+            if (instance) |*t| return t.io();
+            instance = Io.Threaded.init(std.heap.page_allocator, .{});
+            return instance.?.io();
+        }
+    };
+    return S.get();
 }
 
-fn initWriter(path: [*:0]const u8) !*CZipWriter {
-    const io = std.testing.io;
+export fn zig_zip_writer_init(path: [*:0]const u8) ?*CZipWriter {
+    const io = getIo();
     const allocator = std.heap.page_allocator;
-    const writer = try allocator.create(ZipWriter);
-    writer.* = ZipWriter.init(allocator, io, std.mem.sliceTo(path, 0)) catch |e| {
+    const writer = allocator.create(ZipWriter) catch return null;
+    writer.* = ZipWriter.init(allocator, io, std.mem.sliceTo(path, 0)) catch {
         allocator.destroy(writer);
-        return e;
+        return null;
     };
     return @ptrCast(writer);
 }
@@ -239,13 +251,13 @@ export fn zig_zip_writer_deinit(handle: *CZipWriter) void {
 }
 
 export fn zig_zip_extract(zip_path: [*:0]const u8, dest_path: [*:0]const u8) c_int {
-    const io = std.testing.io;
+    const io = getIo();
     extractZip(io, std.mem.sliceTo(zip_path, 0), std.mem.sliceTo(dest_path, 0)) catch return -1;
     return 0;
 }
 
 export fn zig_zip_validate(zip_path: [*:0]const u8) c_int {
-    const io = std.testing.io;
+    const io = getIo();
     validateZip(io, std.mem.sliceTo(zip_path, 0)) catch return -1;
     return 0;
 }
