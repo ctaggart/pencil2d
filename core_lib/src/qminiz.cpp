@@ -15,103 +15,75 @@ GNU General Public License for more details.
 */
 #include "qminiz.h"
 
-#include <sstream>
+#include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
-#include <QDirIterator>
 #include "util.h"
 
 
 Status MiniZ::sanityCheck(const QString& sZipFilePath)
 {
-    mz_zip_archive* mz = new mz_zip_archive;
-    OnScopeExit(delete mz);
-    mz_zip_zero_struct(mz);
-    QByteArray utf8Bytes = sZipFilePath.toUtf8();
-    mz_bool readOk = mz_zip_reader_init_file(mz, utf8Bytes.constData(), 0);
+    DebugDetails dd;
+    dd << "\n[Zig ZIP sanity check]\n";
 
-    mz_zip_error read_err = mz_zip_get_last_error(mz);
-
-    mz_bool closeOk = mz_zip_reader_end(mz);
-
-    mz_zip_error close_err = mz_zip_get_last_error(mz);
-
-    if (!readOk || !closeOk) {
-        DebugDetails dd;
-
-        dd << "\n[Miniz sanity check]\n";
-        if (read_err != MZ_ZIP_NO_ERROR) {
-            dd << QString("Found an error while reading the file. Error code: %2, reason: %3").arg(static_cast<int>(read_err)).arg(mz_zip_get_error_string(read_err));
-        }
-        if (close_err != MZ_ZIP_NO_ERROR) {
-            dd << QString("Found an error while closing the file. Error code: %2, reason: %3").arg(static_cast<int>(close_err)).arg(mz_zip_get_error_string(close_err));
-        }
+    QFile file(sZipFilePath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        dd << QString("Error: Cannot open file: %1").arg(sZipFilePath);
         return Status(Status::ERROR_MINIZ_FAIL, dd);
     }
 
+    QByteArray data = file.readAll();
+    file.close();
+
+    int result = zig_zip_validate(
+        reinterpret_cast<const unsigned char*>(data.constData()),
+        static_cast<size_t>(data.size()));
+
+    if (result != 0)
+    {
+        dd << QString("Error: ZIP validation failed for: %1").arg(sZipFilePath);
+        return Status(Status::ERROR_MINIZ_FAIL, dd);
+    }
 
     return Status::OK;
 }
 
-size_t MiniZ::istreamReadCallback(void *pOpaque, mz_uint64 file_ofs, void * pBuf, size_t n)
-{
-    std::istream *stream = static_cast<std::istream*>(pOpaque);
-    mz_int64 cur_ofs = stream->tellg();
-    if ((mz_int64)file_ofs < 0 || (cur_ofs != (mz_int64)file_ofs && stream->seekg((mz_int64)file_ofs, std::ios_base::beg)))
-        return 0;
-    stream->read(static_cast<char*>(pBuf), n);
-    return stream->gcount();
-}
-
-// ReSharper disable once CppInconsistentNaming
 Status MiniZ::compressFolder(QString zipFilePath, QString srcFolderPath, const QStringList& fileList, QString mimetype)
 {
     DebugDetails dd;
-    dd << "\n[Miniz COMPRESSION diagnostics]\n";
+    dd << "\n[Zig ZIP COMPRESSION diagnostics]\n";
     dd << QString("Creating Zip %1 from folder %2").arg(zipFilePath, srcFolderPath);
 
     if (!srcFolderPath.endsWith("/"))
     {
-        dd << "Adding / to path";
         srcFolderPath.append("/");
     }
 
-    mz_zip_archive* mz = new mz_zip_archive;
-    ScopeGuard mzScopeGuard([&] {
-        delete mz;
-    });
-
-    mz_zip_zero_struct(mz);
-
-    mz_bool ok = mz_zip_writer_init_file(mz, zipFilePath.toUtf8().data(), 0);
-
-    if (!ok)
+    void* writer = zig_zip_writer_create();
+    if (!writer)
     {
-        mz_zip_error err = mz_zip_get_last_error(mz);
-        dd << QString("Error: Failed to init writer. Error code: %1, reason: %2").arg(static_cast<int>(err)).arg(mz_zip_get_error_string(err));
+        dd << "Error: Failed to create ZIP writer";
         return Status(Status::FAIL, dd);
     }
-    ScopeGuard mzScopeGuard2([&] {
-        mz_zip_writer_end(mz);
+    ScopeGuard writerGuard([&] {
+        zig_zip_writer_destroy(writer);
     });
 
-    // Add special uncompressed mimetype file to help with the identification of projects
+    // Add uncompressed mimetype entry first
     {
         QByteArray mimeData = mimetype.toUtf8();
-        std::stringstream mimeStream(mimeData.toStdString());
-        ok = mz_zip_writer_add_read_buf_callback(mz, "mimetype", MiniZ::istreamReadCallback, &mimeStream, mimeData.length(),
-                                    0, "", 0, MZ_NO_COMPRESSION, 0, 0,
-                                    0, 0);
-        if (!ok)
+        int ok = zig_zip_writer_add_bytes(writer, "mimetype",
+            reinterpret_cast<const unsigned char*>(mimeData.constData()),
+            static_cast<size_t>(mimeData.size()), false);
+        if (ok != 0)
         {
-            mz_zip_error err = mz_zip_get_last_error(mz);
-            dd << QString("ERROR: Unable to add mimetype. Error code: %1, reason: %2").arg(static_cast<int>(err)).arg(mz_zip_get_error_string(err));
+            dd << "Error: Unable to add mimetype entry";
             return Status(Status::FAIL, dd);
         }
     }
 
-    //qDebug() << "SrcFolder=" << srcFolderPath;
     for (const QString& filePath : fileList)
     {
         QString sRelativePath = filePath;
@@ -120,22 +92,54 @@ Status MiniZ::compressFolder(QString zipFilePath, QString srcFolderPath, const Q
 
         dd << QString("Add file to zip: ").append(sRelativePath);
 
-        ok = mz_zip_writer_add_file(mz,
-                                    sRelativePath.toUtf8().data(),
-                                    filePath.toUtf8().data(),
-                                    "", 0, MZ_BEST_SPEED);
-        if (!ok)
+        QFile srcFile(filePath);
+        if (!srcFile.open(QIODevice::ReadOnly))
         {
-            mz_zip_error err = mz_zip_get_last_error(mz);
-            dd << QString("Error: Unable to add file: %3. Error code: %1, reason: %2 - Aborting!").arg(static_cast<int>(err)).arg(mz_zip_get_error_string(err), sRelativePath);
+            dd << QString("Error: Cannot open source file: %1 - Aborting!").arg(filePath);
+            return Status(Status::FAIL, dd);
+        }
+        QByteArray fileData = srcFile.readAll();
+        srcFile.close();
+
+        QByteArray nameUtf8 = sRelativePath.toUtf8();
+        int ok = zig_zip_writer_add_bytes(writer, nameUtf8.constData(),
+            reinterpret_cast<const unsigned char*>(fileData.constData()),
+            static_cast<size_t>(fileData.size()), true);
+        if (ok != 0)
+        {
+            dd << QString("Error: Unable to add file: %1 - Aborting!").arg(sRelativePath);
             return Status(Status::FAIL, dd);
         }
     }
-    ok &= mz_zip_writer_finalize_archive(mz);
-    if (!ok)
+
+    if (zig_zip_writer_finalize(writer) != 0)
     {
-        mz_zip_error err = mz_zip_get_last_error(mz);
-        dd << QString("Error: Failed to finalize archive. Error code %1, reason: %2").arg(static_cast<int>(err)).arg(mz_zip_get_error_string(err));
+        dd << "Error: Failed to finalize archive";
+        return Status(Status::FAIL, dd);
+    }
+
+    // Get the completed ZIP data and write to disk
+    const unsigned char* zipData = nullptr;
+    size_t zipLen = 0;
+    if (zig_zip_writer_get_data(writer, &zipData, &zipLen) != 0)
+    {
+        dd << "Error: Failed to get ZIP data";
+        return Status(Status::FAIL, dd);
+    }
+
+    QFile outFile(zipFilePath);
+    if (!outFile.open(QIODevice::WriteOnly))
+    {
+        dd << QString("Error: Cannot create output file: %1").arg(zipFilePath);
+        return Status(Status::FAIL, dd);
+    }
+    qint64 written = outFile.write(reinterpret_cast<const char*>(zipData),
+                                   static_cast<qint64>(zipLen));
+    outFile.close();
+
+    if (written != static_cast<qint64>(zipLen))
+    {
+        dd << "Error: Failed to write ZIP file to disk";
         return Status(Status::FAIL, dd);
     }
 
@@ -145,7 +149,7 @@ Status MiniZ::compressFolder(QString zipFilePath, QString srcFolderPath, const Q
 Status MiniZ::uncompressFolder(QString zipFilePath, QString destPath)
 {
     DebugDetails dd;
-    dd << "\n[Miniz EXTRACTION diagnostics]\n";
+    dd << "\n[Zig ZIP EXTRACTION diagnostics]\n";
     dd << QString("Unzip file %1 to folder %2").arg(zipFilePath, destPath);
 
     if (!QFile::exists(zipFilePath))
@@ -154,6 +158,17 @@ Status MiniZ::uncompressFolder(QString zipFilePath, QString destPath)
         return Status::FILE_NOT_FOUND;
     }
 
+    // Read the entire ZIP file into memory
+    QFile zipFile(zipFilePath);
+    if (!zipFile.open(QIODevice::ReadOnly))
+    {
+        dd << QString("Error: Cannot open ZIP file: %1").arg(zipFilePath);
+        return Status(Status::FAIL, dd);
+    }
+    QByteArray zipData = zipFile.readAll();
+    zipFile.close();
+
+    // Ensure destination directory exists
     QString sBaseDir = QFileInfo(destPath).absolutePath();
     QDir baseDir(sBaseDir);
     if (!baseDir.exists())
@@ -161,67 +176,94 @@ Status MiniZ::uncompressFolder(QString zipFilePath, QString destPath)
         bool ok = baseDir.mkpath(".");
         Q_ASSERT(ok);
     }
-
     baseDir.makeAbsolute();
 
-    mz_zip_archive* mz = new mz_zip_archive;
-    ScopeGuard mzScopeGuard([&] {
-        delete mz;
-    });
-
-    mz_zip_zero_struct(mz);
-
-    mz_bool ok = mz_zip_reader_init_file(mz, zipFilePath.toUtf8().data(), 0);
-    if (!ok) {
-        mz_zip_error err = mz_zip_get_last_error(mz);
-        dd << QString("Error: Failed to init reader. Error code: %1, reason: %2").arg(static_cast<int>(err)).arg(mz_zip_get_error_string(err));
+    // Open ZIP reader from memory
+    void* reader = zig_zip_reader_open(
+        reinterpret_cast<const unsigned char*>(zipData.constData()),
+        static_cast<size_t>(zipData.size()));
+    if (!reader)
+    {
+        dd << "Error: Failed to open ZIP reader";
         return Status(Status::FAIL, dd);
     }
-    ScopeGuard mzScopeGuard2([&] {
-        mz_zip_reader_end(mz);
+    ScopeGuard readerGuard([&] {
+        zig_zip_reader_destroy(reader);
     });
 
-    int num = mz_zip_reader_get_num_files(mz);
+    int numEntries = zig_zip_reader_count(reader);
+    bool ok = true;
 
-    mz_zip_archive_file_stat* stat = new mz_zip_archive_file_stat;
-    OnScopeExit(delete stat);
-
-    for (int i = 0; i < num; ++i)
+    // First pass: create directories
+    for (int i = 0; i < numEntries; ++i)
     {
-        ok &= mz_zip_reader_file_stat(mz, i, stat);
-
-        if (stat->m_is_directory)
+        if (zig_zip_reader_entry_is_dir(reader, i))
         {
-            QString sFolderPath = QString::fromUtf8(stat->m_filename);
-            dd << QString("Make Dir: ").append(sFolderPath);
+            const char* namePtr = nullptr;
+            size_t nameLen = 0;
+            if (zig_zip_reader_entry_name(reader, i, &namePtr, &nameLen) != 0)
+                continue;
 
-            bool mkDirOK = baseDir.mkpath(sFolderPath);
+            QString dirName = QString::fromUtf8(namePtr, static_cast<int>(nameLen));
+            dd << QString("Make Dir: ").append(dirName);
+
+            bool mkDirOK = baseDir.mkpath(dirName);
             Q_ASSERT(mkDirOK);
             if (!mkDirOK)
                 dd << "Make Dir failed.";
         }
     }
 
-    for (int i = 0; i < num; ++i)
+    // Second pass: extract files
+    for (int i = 0; i < numEntries; ++i)
     {
-        ok &= mz_zip_reader_file_stat(mz, i, stat);
+        if (zig_zip_reader_entry_is_dir(reader, i))
+            continue;
 
-        if (!stat->m_is_directory)
+        const char* namePtr = nullptr;
+        size_t nameLen = 0;
+        if (zig_zip_reader_entry_name(reader, i, &namePtr, &nameLen) != 0)
         {
-            if (QString(stat->m_filename) == "mimetype") continue;
-            QString sFullPath = baseDir.filePath(QString::fromUtf8(stat->m_filename));
-            dd << QString("Unzip file: ").append(sFullPath);
-            bool b = QFileInfo(sFullPath).absoluteDir().mkpath(".");
-            Q_ASSERT(b);
-
-            bool extractOK = mz_zip_reader_extract_to_file(mz, i, sFullPath.toUtf8(), 0);
-            if (!extractOK)
-            {
-                ok = false;
-                mz_zip_error err = mz_zip_get_last_error(mz);
-                dd << QString("WARNING: Unable to extract file. Error code: %1, reason: %2").arg(static_cast<int>(err)).arg(mz_zip_get_error_string(err));
-            }
+            ok = false;
+            continue;
         }
+
+        QString entryName = QString::fromUtf8(namePtr, static_cast<int>(nameLen));
+        if (entryName == "mimetype") continue;
+
+        QString sFullPath = baseDir.filePath(entryName);
+        dd << QString("Unzip file: ").append(sFullPath);
+
+        // Ensure parent directory exists
+        bool b = QFileInfo(sFullPath).absoluteDir().mkpath(".");
+        Q_ASSERT(b);
+
+        // Extract entry data
+        unsigned char* entryData = nullptr;
+        size_t entryLen = 0;
+        if (zig_zip_reader_extract(reader, i, &entryData, &entryLen) != 0)
+        {
+            ok = false;
+            dd << QString("WARNING: Unable to extract file: %1").arg(entryName);
+            continue;
+        }
+
+        // Write to disk
+        QFile outFile(sFullPath);
+        if (outFile.open(QIODevice::WriteOnly))
+        {
+            outFile.write(reinterpret_cast<const char*>(entryData),
+                         static_cast<qint64>(entryLen));
+            outFile.close();
+        }
+        else
+        {
+            ok = false;
+            dd << QString("WARNING: Unable to write file: %1").arg(sFullPath);
+        }
+
+        // Free the extracted data
+        zig_free(entryData, entryLen);
     }
 
     if (!ok)

@@ -326,7 +326,6 @@ const core_lib_sources: []const []const u8 = &.{
     "core_lib/src/managers/toolmanager.cpp",
     "core_lib/src/managers/undoredomanager.cpp",
     "core_lib/src/managers/viewmanager.cpp",
-    "core_lib/src/miniz.cpp",
     "core_lib/src/movieexporter.cpp",
     "core_lib/src/movieimporter.cpp",
     "core_lib/src/onionskinsubpainter.cpp",

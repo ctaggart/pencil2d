@@ -3,6 +3,10 @@
 // is generated or kept in sync with this file.
 
 const std = @import("std");
+pub const pclx_zip = @import("pclx_zip.zig");
+comptime {
+    _ = &pclx_zip;
+}
 
 pub const pi: f64 = 3.14159265358979323846;
 
