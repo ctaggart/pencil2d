@@ -879,6 +879,9 @@ pub fn Event(comptime Args: type) type {
 /// Void event (no arguments)
 pub const VoidEvent = Event(void);
 
+// Re-export ZIP module
+pub const pclx_zip = @import("pclx_zip.zig");
+
 // ── C ABI exports for earlier functions ──────────────────────────────
 
 export fn zig_pointOnCubic(
