@@ -1,0 +1,7 @@
+.{
+    .name = .pencil,
+    .version = "0.16.0-dev.2960+ce1f7136a",
+    .dependencies = .{},
+    .paths = .{""},
+    .fingerprint = 0x8a615c8bbedb00d4,
+}

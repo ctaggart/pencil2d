@@ -1,0 +1,1 @@
+{"type":"object","properties":{"ax":{"type":"number"},"ay":{"type":"number"},"bx":{"type":"number"},"by":{"type":"number"}},"required":["ax","ay","bx","by"]}

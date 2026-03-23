@@ -1,0 +1,1 @@
+{"type":"object","properties":{"m00":{"type":"number"},"m01":{"type":"number"},"m10":{"type":"number"},"m11":{"type":"number"},"tx":{"type":"number"},"ty":{"type":"number"},"px":{"type":"number"},"py":{"type":"number"}},"required":["m00","m01","m10","m11","tx","ty","px","py"]}

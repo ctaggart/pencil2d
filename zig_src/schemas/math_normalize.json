@@ -1,0 +1,1 @@
+{"type":"object","properties":{"x":{"type":"number"},"min":{"type":"number"},"max":{"type":"number"}},"required":["x","min","max"]}

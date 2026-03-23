@@ -1,0 +1,1 @@
+{"type":"object","properties":{"p0x":{"type":"number"},"p0y":{"type":"number"},"c1x":{"type":"number"},"c1y":{"type":"number"},"c2x":{"type":"number"},"c2y":{"type":"number"},"p1x":{"type":"number"},"p1y":{"type":"number"},"t":{"type":"number","description":"Parameter in [0,1]"}},"required":["p0x","p0y","c1x","c1y","c2x","c2y","p1x","p1y","t"]}

@@ -1,0 +1,1 @@
+{"type":"object","properties":{"color_a":{"type":"integer","description":"ARGB color as 0xAARRGGBB"},"color_b":{"type":"integer","description":"ARGB color as 0xAARRGGBB"}},"required":["color_a","color_b"]}
