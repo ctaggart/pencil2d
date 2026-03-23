@@ -15,10 +15,60 @@ GNU General Public License for more details.
 
 */
 
+#include <cstdlib>
+#include <cstdio>
 #include "log.h"
 #include "pencil2d.h"
 #include "pencilerror.h"
 #include "platformhandler.h"
+
+// Zig CLI parser (C ABI)
+extern "C" {
+    struct ZigParsedArgs {
+        int mode;           // 0=gui, 1=export, 2=mcp, 3=help, 4=version, -1=err
+        const char* input_path;
+        const char** export_paths;
+        int export_path_count;
+        const char* camera;
+        int width;
+        int height;
+        int start_frame;
+        int end_frame;
+        int transparency;
+        int mcp_port;
+    };
+    ZigParsedArgs* zig_parse_args(int argc, const char** argv);
+}
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+static int launchMcpServer(int port, const char* argv0)
+{
+    // Derive pencil2d-mcp path from our own executable path
+    std::string self(argv0);
+    auto sep = self.find_last_of("/\\");
+    std::string dir = (sep != std::string::npos) ? self.substr(0, sep + 1) : "";
+#ifdef _WIN32
+    std::string mcp_exe = dir + "pencil2d-mcp.exe";
+#else
+    std::string mcp_exe = dir + "pencil2d-mcp";
+#endif
+
+    char portStr[16];
+    snprintf(portStr, sizeof(portStr), "%d", port);
+
+    // Replace this process with pencil2d-mcp
+#ifdef _WIN32
+    return (int)_execl(mcp_exe.c_str(), "pencil2d-mcp", "--port", portStr, nullptr);
+#else
+    execl(mcp_exe.c_str(), "pencil2d-mcp", "--port", portStr, nullptr);
+    return -1; // exec failed
+#endif
+}
 
 /**
  * This is the entrypoint of the program. It performs basic initialization, then
@@ -26,13 +76,30 @@ GNU General Public License for more details.
  */
 int main(int argc, char* argv[])
 {
+    // Parse CLI with Zig before Qt initialization
+    auto* args = zig_parse_args(argc, const_cast<const char**>(argv));
+
+    switch (args->mode)
+    {
+        case 3: // help
+        case 4: // version
+            return EXIT_SUCCESS;
+        case -1: // error
+            return EXIT_FAILURE;
+        case 2: // mcp
+            return launchMcpServer(args->mcp_port, argv[0]);
+        default:
+            break;
+    }
+
+    // GUI or export mode — proceed with Qt
     Q_INIT_RESOURCE(core_lib);
     PlatformHandler::initialise();
     initCategoryLogging();
 
     Pencil2D app(argc, argv);
 
-    switch (app.handleCommandLineOptions().code())
+    switch (app.handleCommandLineOptions(args).code())
     {
         case Status::OK:
             return Pencil2D::exec();

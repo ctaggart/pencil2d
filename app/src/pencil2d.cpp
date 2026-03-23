@@ -31,7 +31,6 @@ GNU General Public License for more details.
 #include <QMessageBox>
 
 #include "commandlineexporter.h"
-#include "commandlineparser.h"
 #include "mainwindow2.h"
 #include "pencildef.h"
 #include "platformhandler.h"
@@ -69,19 +68,20 @@ Pencil2D::~Pencil2D()
     // you need a non-default destructor to avoid compilation error.
 }
 
-Status Pencil2D::handleCommandLineOptions()
+Status Pencil2D::handleCommandLineOptions(const ZigParsedArgs* args)
 {
-    CommandLineParser parser;
-    parser.process(arguments());
-
 #ifndef QT_DEBUG
     if (isInstanceOpen()) {
         return Status::SAFE;
     }
 #endif
 
-    QString inputPath = parser.inputPath();
-    QStringList outputPaths = parser.outputPaths();
+    QString inputPath = args->input_path ? QString::fromUtf8(args->input_path) : QString();
+    QStringList outputPaths;
+    for (int i = 0; i < args->export_path_count; ++i) {
+        if (args->export_paths[i])
+            outputPaths << QString::fromUtf8(args->export_paths[i]);
+    }
 
     if (outputPaths.isEmpty())
     {
@@ -94,12 +94,12 @@ Status Pencil2D::handleCommandLineOptions()
     CommandLineExporter exporter(mainWindow->mEditor);
     if (exporter.process(inputPath,
                          outputPaths,
-                         parser.camera(),
-                         parser.width(),
-                         parser.height(),
-                         parser.startFrame(),
-                         parser.endFrame(),
-                         parser.transparency()))
+                         args->camera ? QString::fromUtf8(args->camera) : QString(),
+                         args->width,
+                         args->height,
+                         args->start_frame,
+                         args->end_frame,
+                         args->transparency != 0))
     {
         return Status::SAFE;
     }

@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "pencilerror.h"
 
 class MainWindow2;
+struct ZigParsedArgs;
 class QLockFile;
 
 /**
@@ -58,7 +59,7 @@ public:
      *         @li any other code if an error occurred and the application is unable to start.
      *  @see exec()
      */
-    Status handleCommandLineOptions();
+    Status handleCommandLineOptions(const struct ZigParsedArgs* args);
 
     /**
      * Checks if multiple instances of Pencil2D are open.

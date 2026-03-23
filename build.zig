@@ -413,7 +413,7 @@ const app_sources: []const []const u8 = &.{
     "app/src/colorslider.cpp",
     "app/src/colorwheel.cpp",
     "app/src/commandlineexporter.cpp",
-    "app/src/commandlineparser.cpp",
+    // "app/src/commandlineparser.cpp", // replaced by zig_src/cli.zig
     "app/src/doubleprogressdialog.cpp",
     "app/src/elidedlabel.cpp",
     "app/src/errordialog.cpp",
@@ -531,7 +531,7 @@ const app_moc_headers: []const []const u8 = &.{
     "app/src/colorslider.h",
     "app/src/colorwheel.h",
     "app/src/commandlineexporter.h",
-    "app/src/commandlineparser.h",
+    // "app/src/commandlineparser.h", // replaced by zig_src/cli.zig
     "app/src/doubleprogressdialog.h",
     "app/src/elidedlabel.h",
     "app/src/errordialog.h",

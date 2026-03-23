@@ -4,8 +4,10 @@
 
 const std = @import("std");
 pub const pclx_zip = @import("pclx_zip.zig");
+pub const cli = @import("cli.zig");
 comptime {
     _ = &pclx_zip;
+    _ = &cli;
 }
 
 pub const pi: f64 = 3.14159265358979323846;
