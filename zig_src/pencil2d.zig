@@ -10,6 +10,8 @@ pub const layer = @import("layer.zig");
 pub const object = @import("object.zig");
 pub const xml = @import("xml.zig");
 pub const pclx_file = @import("pclx_file.zig");
+pub const timeline = @import("timeline.zig");
+pub const vector_image = @import("vector_image.zig");
 comptime {
     _ = &pclx_zip;
     _ = &cli;
@@ -18,6 +20,8 @@ comptime {
     _ = &object;
     _ = &xml;
     _ = &pclx_file;
+    _ = &timeline;
+    _ = &vector_image;
 }
 
 pub const pi: f64 = 3.14159265358979323846;
