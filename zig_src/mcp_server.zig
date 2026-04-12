@@ -4,6 +4,8 @@ const pencil2d = @import("pencil2d.zig");
 const Point = pencil2d.Point;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const Object = pencil2d.object.Object;
+const pclx_file = pencil2d.pclx_file;
 
 // ── Minimal MCP Protocol Implementation ──────────────────────────────
 // JSON-RPC 2.0 over Content-Length framing (MCP spec 2025-11-25)
@@ -72,6 +74,57 @@ const tools = [_]ToolDef{
         .description = "Apply a 2D affine transformation matrix to a point",
         .handler = handleMatrixTransform,
         .input_schema = @embedFile("schemas/matrix_transform.json"),
+    },
+    // ── Project / Layer / Keyframe tools ──
+    .{
+        .name = "project_open",
+        .description = "Open a .pclx animation file. Provide the file path.",
+        .handler = handleProjectOpen,
+        .input_schema =
+        \\{"type":"object","properties":{"path":{"type":"string","description":"Absolute path to .pclx file"}},"required":["path"]}
+        ,
+    },
+    .{ .name = "project_info", .description = "Get info about the currently loaded project (layers, keyframe count, animation length)", .handler = handleProjectInfo },
+    .{ .name = "layer_list", .description = "List all layers in the current project with type, visibility, and keyframe count", .handler = handleLayerList },
+    .{
+        .name = "layer_add",
+        .description = "Add a new layer. Type: bitmap, vector, camera, sound",
+        .handler = handleLayerAdd,
+        .input_schema =
+        \\{"type":"object","properties":{"name":{"type":"string"},"type":{"type":"string","enum":["bitmap","vector","camera","sound"]}},"required":["name","type"]}
+        ,
+    },
+    .{
+        .name = "layer_remove",
+        .description = "Remove a layer by index (0-based)",
+        .handler = handleLayerRemove,
+        .input_schema =
+        \\{"type":"object","properties":{"index":{"type":"integer"}},"required":["index"]}
+        ,
+    },
+    .{
+        .name = "keyframe_list",
+        .description = "List all keyframes on a layer (by index or name)",
+        .handler = handleKeyframeList,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string","description":"Layer name or index"}},"required":["layer"]}
+        ,
+    },
+    .{
+        .name = "keyframe_add",
+        .description = "Add an empty keyframe at a position on a layer",
+        .handler = handleKeyframeAdd,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string","description":"Layer name or index"},"frame":{"type":"integer"}},"required":["layer","frame"]}
+        ,
+    },
+    .{
+        .name = "keyframe_remove",
+        .description = "Remove a keyframe at a position from a layer",
+        .handler = handleKeyframeRemove,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string","description":"Layer name or index"},"frame":{"type":"integer"}},"required":["layer","frame"]}
+        ,
     },
 };
 
@@ -408,6 +461,188 @@ fn handleMatrixTransform(allocator: Allocator, args: ?std.json.Value) anyerror![
     m.m[2][1] = getNum(args, "ty") orelse 0;
     const p = m.mapPoint(.{ .x = getNum(args, "px") orelse 0, .y = getNum(args, "py") orelse 0 });
     return std.fmt.allocPrint(allocator, "{{\"x\":{d},\"y\":{d}}}", .{ p.x, p.y });
+}
+
+// ── Project State ────────────────────────────────────────────────────
+
+var g_project: ?*Object = null;
+var g_project_allocator: Allocator = std.heap.smp_allocator;
+
+fn getProject() ?*Object {
+    return g_project;
+}
+
+fn resolveLayer(args: ?std.json.Value) ?*pencil2d.layer.Layer {
+    const proj = getProject() orelse return null;
+    const layer_str = getStr(args, "layer") orelse return null;
+
+    // Try as index first
+    if (std.fmt.parseInt(usize, layer_str, 10) catch null) |idx| {
+        return proj.getLayer(idx);
+    }
+    // Try as name
+    return proj.findLayerByName(layer_str);
+}
+
+fn handleProjectOpen(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const path = getStr(args, "path") orelse return std.fmt.allocPrint(allocator, "\"error: missing path argument\"", .{});
+
+    // Read file from disk
+    const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+        return std.fmt.allocPrint(allocator, "\"error: cannot open file: {s}\"", .{@errorName(err)});
+    };
+    defer file.close();
+    const data = file.readToEndAlloc(g_project_allocator, 100 * 1024 * 1024) catch |err| {
+        return std.fmt.allocPrint(allocator, "\"error: cannot read file: {s}\"", .{@errorName(err)});
+    };
+    defer g_project_allocator.free(data);
+
+    // Close existing project
+    if (g_project) |old| {
+        old.deinit();
+        g_project_allocator.destroy(old);
+        g_project = null;
+    }
+
+    // Load
+    const proj = g_project_allocator.create(Object) catch return std.fmt.allocPrint(allocator, "\"error: out of memory\"", .{});
+    proj.* = pclx_file.load(g_project_allocator, data) catch |err| {
+        g_project_allocator.destroy(proj);
+        return std.fmt.allocPrint(allocator, "\"error: failed to parse pclx: {s}\"", .{@errorName(err)});
+    };
+    g_project = proj;
+
+    const info = pclx_file.getProjectInfo(proj, allocator) catch
+        return std.fmt.allocPrint(allocator, "\"project loaded\"", .{});
+    defer allocator.free(info.layers);
+
+    return std.fmt.allocPrint(allocator,
+        \\{{"loaded":true,"layers":{d},"keyframes":{d},"animation_length":{d}}}
+    , .{ info.layer_count, info.total_keyframes, info.animation_length });
+}
+
+fn handleProjectInfo(allocator: Allocator, _: ?std.json.Value) anyerror![]const u8 {
+    const proj = getProject() orelse return std.fmt.allocPrint(allocator, "\"error: no project loaded. Use project_open first.\"", .{});
+    const info = try pclx_file.getProjectInfo(proj, allocator);
+    defer allocator.free(info.layers);
+
+    var out: Io.Writer.Allocating = .init(allocator);
+    try out.writer.print("{{\"layers\":{d},\"keyframes\":{d},\"animation_length\":{d},\"palette_colors\":{d}}}", .{
+        info.layer_count,
+        info.total_keyframes,
+        info.animation_length,
+        proj.colorCount(),
+    });
+    return try out.toOwnedSlice();
+}
+
+fn handleLayerList(allocator: Allocator, _: ?std.json.Value) anyerror![]const u8 {
+    const proj = getProject() orelse return std.fmt.allocPrint(allocator, "\"error: no project loaded\"", .{});
+
+    var out: Io.Writer.Allocating = .init(allocator);
+    try out.writer.writeByte('[');
+    for (proj.layers.items, 0..) |layer, i| {
+        if (i > 0) try out.writer.writeByte(',');
+        const type_name = switch (layer.layer_type) {
+            .bitmap => "bitmap",
+            .vector => "vector",
+            .camera => "camera",
+            .sound => "sound",
+            .undefined => "unknown",
+        };
+        try out.writer.print("{{\"index\":{d},\"id\":{d},\"name\":\"", .{ i, layer.id });
+        try writeJsonStringRaw(&out.writer, layer.name);
+        try out.writer.print("\",\"type\":\"{s}\",\"visible\":{s},\"keyframes\":{d}}}", .{
+            type_name,
+            if (layer.visible) "true" else "false",
+            layer.keyFrameCount(),
+        });
+    }
+    try out.writer.writeByte(']');
+    return try out.toOwnedSlice();
+}
+
+fn handleLayerAdd(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const proj = getProject() orelse return std.fmt.allocPrint(allocator, "\"error: no project loaded\"", .{});
+    const name = getStr(args, "name") orelse return std.fmt.allocPrint(allocator, "\"error: missing name\"", .{});
+    const type_str = getStr(args, "type") orelse "bitmap";
+    const layer_type: pencil2d.layer.LayerType = if (std.mem.eql(u8, type_str, "bitmap")) .bitmap else if (std.mem.eql(u8, type_str, "vector")) .vector else if (std.mem.eql(u8, type_str, "camera")) .camera else if (std.mem.eql(u8, type_str, "sound")) .sound else .bitmap;
+
+    const layer = proj.addNewLayer(layer_type, name) catch
+        return std.fmt.allocPrint(allocator, "\"error: failed to add layer\"", .{});
+
+    return std.fmt.allocPrint(allocator,
+        \\{{"added":true,"id":{d},"index":{d}}}
+    , .{ layer.id, proj.layerCount() - 1 });
+}
+
+fn handleLayerRemove(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const proj = getProject() orelse return std.fmt.allocPrint(allocator, "\"error: no project loaded\"", .{});
+    const idx: usize = if (getNum(args, "index")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing index\"", .{});
+
+    if (proj.deleteLayer(idx)) {
+        return std.fmt.allocPrint(allocator, "{{\"removed\":true,\"remaining_layers\":{d}}}", .{proj.layerCount()});
+    }
+    return std.fmt.allocPrint(allocator, "\"error: invalid layer index\"", .{});
+}
+
+fn handleKeyframeList(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found or no project loaded\"", .{});
+
+    var out: Io.Writer.Allocating = .init(allocator);
+    try out.writer.writeByte('[');
+    for (layer.frames.items, 0..) |kf, i| {
+        if (i > 0) try out.writer.writeByte(',');
+        try out.writer.print("{{\"frame\":{d},\"length\":{d}", .{ kf.pos, kf.length });
+        switch (kf.data) {
+            .bitmap => |b| try out.writer.print(",\"type\":\"bitmap\",\"x\":{d},\"y\":{d},\"opacity\":{d}", .{ b.top_left_x, b.top_left_y, b.opacity }),
+            .camera => |c| try out.writer.print(",\"type\":\"camera\",\"dx\":{d},\"dy\":{d},\"rotation\":{d},\"scale\":{d}", .{ c.translate_x, c.translate_y, c.rotation, c.scaling }),
+            .sound => try out.writer.writeAll(",\"type\":\"sound\""),
+            .empty => try out.writer.writeAll(",\"type\":\"empty\""),
+        }
+        if (kf.filename) |f| {
+            try out.writer.writeAll(",\"file\":\"");
+            try writeJsonStringRaw(&out.writer, f);
+            try out.writer.writeByte('"');
+        }
+        try out.writer.writeByte('}');
+    }
+    try out.writer.writeByte(']');
+    return try out.toOwnedSlice();
+}
+
+fn handleKeyframeAdd(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found or no project loaded\"", .{});
+    const frame: i32 = if (getNum(args, "frame")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing frame\"", .{});
+
+    const added = layer.addNewKeyFrameAt(frame) catch return std.fmt.allocPrint(allocator, "\"error: failed to add keyframe\"", .{});
+    if (added) {
+        return std.fmt.allocPrint(allocator, "{{\"added\":true,\"frame\":{d},\"total_keyframes\":{d}}}", .{ frame, layer.keyFrameCount() });
+    }
+    return std.fmt.allocPrint(allocator, "\"error: keyframe already exists at frame {d}\"", .{frame});
+}
+
+fn handleKeyframeRemove(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found or no project loaded\"", .{});
+    const frame: i32 = if (getNum(args, "frame")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing frame\"", .{});
+
+    if (layer.removeKeyFrame(frame)) {
+        return std.fmt.allocPrint(allocator, "{{\"removed\":true,\"frame\":{d},\"remaining\":{d}}}", .{ frame, layer.keyFrameCount() });
+    }
+    return std.fmt.allocPrint(allocator, "\"error: no keyframe at frame {d}\"", .{frame});
+}
+
+fn writeJsonStringRaw(w: *Io.Writer, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            '\t' => try w.writeAll("\\t"),
+            else => try w.writeByte(c),
+        }
+    }
 }
 
 // ── Transport ────────────────────────────────────────────────────────
