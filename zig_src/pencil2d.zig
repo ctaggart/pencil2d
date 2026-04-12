@@ -9,6 +9,7 @@ pub const keyframe = @import("keyframe.zig");
 pub const layer = @import("layer.zig");
 pub const object = @import("object.zig");
 pub const xml = @import("xml.zig");
+pub const pclx_file = @import("pclx_file.zig");
 comptime {
     _ = &pclx_zip;
     _ = &cli;
@@ -16,6 +17,7 @@ comptime {
     _ = &layer;
     _ = &object;
     _ = &xml;
+    _ = &pclx_file;
 }
 
 pub const pi: f64 = 3.14159265358979323846;
