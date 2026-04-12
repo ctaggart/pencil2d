@@ -126,6 +126,47 @@ const tools = [_]ToolDef{
         \\{"type":"object","properties":{"layer":{"type":"string","description":"Layer name or index"},"frame":{"type":"integer"}},"required":["layer","frame"]}
         ,
     },
+    // ── Save / Drawing / Camera tools ──
+    .{
+        .name = "project_save",
+        .description = "Save the current project to a .pclx file",
+        .handler = handleProjectSave,
+        .input_schema =
+        \\{"type":"object","properties":{"path":{"type":"string","description":"Absolute path for output .pclx file"}},"required":["path"]}
+        ,
+    },
+    .{
+        .name = "frame_draw_line",
+        .description = "Draw a line on a bitmap frame. Creates frame if needed.",
+        .handler = handleFrameDrawLine,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string"},"frame":{"type":"integer"},"x0":{"type":"integer"},"y0":{"type":"integer"},"x1":{"type":"integer"},"y1":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","frame","x0","y0","x1","y1"]}
+        ,
+    },
+    .{
+        .name = "frame_draw_rect",
+        .description = "Draw a filled rectangle on a bitmap frame",
+        .handler = handleFrameDrawRect,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string"},"frame":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"w":{"type":"integer"},"h":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","frame","x","y","w","h"]}
+        ,
+    },
+    .{
+        .name = "frame_draw_ellipse",
+        .description = "Draw a filled ellipse on a bitmap frame",
+        .handler = handleFrameDrawEllipse,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string"},"frame":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"rx":{"type":"integer"},"ry":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","frame","cx","cy","rx","ry"]}
+        ,
+    },
+    .{
+        .name = "camera_set",
+        .description = "Set camera position/rotation/scale at a frame",
+        .handler = handleCameraSet,
+        .input_schema =
+        \\{"type":"object","properties":{"layer":{"type":"string"},"frame":{"type":"integer"},"dx":{"type":"number"},"dy":{"type":"number"},"rotation":{"type":"number"},"scale":{"type":"number"},"easing":{"type":"integer"}},"required":["layer","frame"]}
+        ,
+    },
 };
 
 // ── JSON-RPC framing ─────────────────────────────────────────────────
@@ -630,6 +671,114 @@ fn handleKeyframeRemove(allocator: Allocator, args: ?std.json.Value) anyerror![]
         return std.fmt.allocPrint(allocator, "{{\"removed\":true,\"frame\":{d},\"remaining\":{d}}}", .{ frame, layer.keyFrameCount() });
     }
     return std.fmt.allocPrint(allocator, "\"error: no keyframe at frame {d}\"", .{frame});
+}
+
+fn handleProjectSave(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const proj = getProject() orelse return std.fmt.allocPrint(allocator, "\"error: no project loaded\"", .{});
+    const path = getStr(args, "path") orelse return std.fmt.allocPrint(allocator, "\"error: missing path\"", .{});
+
+    const pclx_data = pclx_file.save(proj, g_project_allocator) catch |err| {
+        return std.fmt.allocPrint(allocator, "\"error: failed to save: {s}\"", .{@errorName(err)});
+    };
+    defer g_project_allocator.free(pclx_data);
+
+    const file = std.fs.createFileAbsolute(path, .{}) catch |err| {
+        return std.fmt.allocPrint(allocator, "\"error: cannot create file: {s}\"", .{@errorName(err)});
+    };
+    defer file.close();
+    file.writeAll(pclx_data) catch |err| {
+        return std.fmt.allocPrint(allocator, "\"error: write failed: {s}\"", .{@errorName(err)});
+    };
+
+    return std.fmt.allocPrint(allocator, "{{\"saved\":true,\"path\":\"{s}\",\"bytes\":{d}}}", .{ path, pclx_data.len });
+}
+
+const BitmapData = pencil2d.keyframe.BitmapData;
+
+fn ensureBitmapFrame(layer: *pencil2d.layer.Layer, frame: i32, args: ?std.json.Value) !*pencil2d.keyframe.KeyFrame {
+    _ = args;
+    if (layer.getKeyFrameAt(frame)) |kf| {
+        if (kf.data != .bitmap) {
+            // Replace data with bitmap
+            kf.data = .{ .bitmap = try BitmapData.create(layer.allocator, 200, 200, -100, -100) };
+        } else if (kf.data.bitmap.pixels == null) {
+            kf.data.bitmap = try BitmapData.create(layer.allocator, 200, 200, -100, -100);
+        }
+        return kf;
+    }
+    // Create new frame
+    _ = try layer.addKeyFrame(frame, .{
+        .pos = frame,
+        .data = .{ .bitmap = try BitmapData.create(layer.allocator, 200, 200, -100, -100) },
+    });
+    return layer.getKeyFrameAt(frame).?;
+}
+
+fn getColor(args: ?std.json.Value) [4]u8 {
+    const r: u8 = if (getNum(args, "r")) |v| @intFromFloat(v) else 0;
+    const g: u8 = if (getNum(args, "g")) |v| @intFromFloat(v) else 0;
+    const b: u8 = if (getNum(args, "b")) |v| @intFromFloat(v) else 0;
+    const a: u8 = if (getNum(args, "a")) |v| @intFromFloat(v) else 255;
+    return .{ r, g, b, a };
+}
+
+fn handleFrameDrawLine(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found\"", .{});
+    const frame: i32 = if (getNum(args, "frame")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing frame\"", .{});
+    const kf = try ensureBitmapFrame(layer, frame, args);
+    const x0: i32 = if (getNum(args, "x0")) |n| @intFromFloat(n) else 0;
+    const y0: i32 = if (getNum(args, "y0")) |n| @intFromFloat(n) else 0;
+    const x1: i32 = if (getNum(args, "x1")) |n| @intFromFloat(n) else 0;
+    const y1: i32 = if (getNum(args, "y1")) |n| @intFromFloat(n) else 0;
+    kf.data.bitmap.drawLine(x0, y0, x1, y1, getColor(args));
+    return std.fmt.allocPrint(allocator, "{{\"drawn\":\"line\",\"frame\":{d}}}", .{frame});
+}
+
+fn handleFrameDrawRect(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found\"", .{});
+    const frame: i32 = if (getNum(args, "frame")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing frame\"", .{});
+    const kf = try ensureBitmapFrame(layer, frame, args);
+    const x: i32 = if (getNum(args, "x")) |n| @intFromFloat(n) else 0;
+    const y: i32 = if (getNum(args, "y")) |n| @intFromFloat(n) else 0;
+    const w: i32 = if (getNum(args, "w")) |n| @intFromFloat(n) else 10;
+    const h: i32 = if (getNum(args, "h")) |n| @intFromFloat(n) else 10;
+    kf.data.bitmap.drawRect(x, y, w, h, getColor(args));
+    return std.fmt.allocPrint(allocator, "{{\"drawn\":\"rect\",\"frame\":{d}}}", .{frame});
+}
+
+fn handleFrameDrawEllipse(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found\"", .{});
+    const frame: i32 = if (getNum(args, "frame")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing frame\"", .{});
+    const kf = try ensureBitmapFrame(layer, frame, args);
+    const cx: i32 = if (getNum(args, "cx")) |n| @intFromFloat(n) else 0;
+    const cy: i32 = if (getNum(args, "cy")) |n| @intFromFloat(n) else 0;
+    const rx: i32 = if (getNum(args, "rx")) |n| @intFromFloat(n) else 10;
+    const ry: i32 = if (getNum(args, "ry")) |n| @intFromFloat(n) else 10;
+    kf.data.bitmap.drawEllipse(cx, cy, rx, ry, getColor(args));
+    return std.fmt.allocPrint(allocator, "{{\"drawn\":\"ellipse\",\"frame\":{d}}}", .{frame});
+}
+
+fn handleCameraSet(allocator: Allocator, args: ?std.json.Value) anyerror![]const u8 {
+    const layer = resolveLayer(args) orelse return std.fmt.allocPrint(allocator, "\"error: layer not found\"", .{});
+    const frame: i32 = if (getNum(args, "frame")) |n| @intFromFloat(n) else return std.fmt.allocPrint(allocator, "\"error: missing frame\"", .{});
+
+    const cam_data = pencil2d.keyframe.CameraData{
+        .translate_x = getNum(args, "dx") orelse 0,
+        .translate_y = getNum(args, "dy") orelse 0,
+        .rotation = getNum(args, "rotation") orelse 0,
+        .scaling = getNum(args, "scale") orelse 1,
+        .easing_type = if (getNum(args, "easing")) |e| @enumFromInt(@as(i32, @intFromFloat(e))) else .linear,
+    };
+
+    if (layer.getKeyFrameAt(frame)) |kf| {
+        kf.data = .{ .camera = cam_data };
+    } else {
+        _ = try layer.addKeyFrame(frame, .{ .pos = frame, .data = .{ .camera = cam_data } });
+    }
+
+    return std.fmt.allocPrint(allocator, "{{\"set\":\"camera\",\"frame\":{d},\"dx\":{d},\"dy\":{d},\"rotation\":{d},\"scale\":{d}}}", .{
+        frame, cam_data.translate_x, cam_data.translate_y, cam_data.rotation, cam_data.scaling,
+    });
 }
 
 fn writeJsonStringRaw(w: *Io.Writer, s: []const u8) !void {
