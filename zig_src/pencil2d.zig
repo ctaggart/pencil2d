@@ -619,7 +619,10 @@ pub const PixelBuffer = struct {
             const row = self.constScanLine(top).?;
             var has_content = false;
             for (row) |px| {
-                if (px.a != 0) { has_content = true; break; }
+                if (px.a != 0) {
+                    has_content = true;
+                    break;
+                }
             }
             if (has_content) break;
         }
@@ -631,7 +634,10 @@ pub const PixelBuffer = struct {
             const row = self.constScanLine(bottom).?;
             var has_content = false;
             for (row) |px| {
-                if (px.a != 0) { has_content = true; break; }
+                if (px.a != 0) {
+                    has_content = true;
+                    break;
+                }
             }
             if (has_content) break;
         }
@@ -930,13 +936,24 @@ pub const VoidEvent = Event(void);
 // ── C ABI exports for earlier functions ──────────────────────────────
 
 export fn zig_pointOnCubic(
-    p0x: f64, p0y: f64, c1x: f64, c1y: f64,
-    c2x: f64, c2y: f64, p1x: f64, p1y: f64,
-    t: f64, out_x: *f64, out_y: *f64,
+    p0x: f64,
+    p0y: f64,
+    c1x: f64,
+    c1y: f64,
+    c2x: f64,
+    c2y: f64,
+    p1x: f64,
+    p1y: f64,
+    t: f64,
+    out_x: *f64,
+    out_y: *f64,
 ) void {
     const result = bezier.pointOnCubic(
-        .{ .x = p0x, .y = p0y }, .{ .x = c1x, .y = c1y },
-        .{ .x = c2x, .y = c2y }, .{ .x = p1x, .y = p1y }, t,
+        .{ .x = p0x, .y = p0y },
+        .{ .x = c1x, .y = c1y },
+        .{ .x = c2x, .y = c2y },
+        .{ .x = p1x, .y = p1y },
+        t,
     );
     out_x.* = result.x;
     out_y.* = result.y;
@@ -1144,7 +1161,9 @@ test "PixelBuffer floodFill" {
     const result = try buf.floodFill(5, 5, 0);
     defer std.testing.allocator.free(result.filled);
     var count: usize = 0;
-    for (result.filled) |f| { if (f) count += 1; }
+    for (result.filled) |f| {
+        if (f) count += 1;
+    }
     try std.testing.expectEqual(@as(usize, 100), count);
 }
 
@@ -1196,7 +1215,9 @@ test "Event connect and emit" {
     var received: i32 = 0;
     const handler = struct {
         var value: i32 = 0;
-        fn callback(v: i32) void { value = v; }
+        fn callback(v: i32) void {
+            value = v;
+        }
     };
     ev.connect(&handler.callback);
     ev.emit(42);
@@ -1209,7 +1230,9 @@ test "Event disconnect" {
     var ev: IntEvent = .{};
     const handler = struct {
         var count: i32 = 0;
-        fn callback(_: i32) void { count += 1; }
+        fn callback(_: i32) void {
+            count += 1;
+        }
     };
     handler.count = 0;
     ev.connect(&handler.callback);
@@ -1224,7 +1247,9 @@ test "VoidEvent" {
     var ev: VoidEvent = .{};
     const handler = struct {
         var called: bool = false;
-        fn callback(_: void) void { called = true; }
+        fn callback(_: void) void {
+            called = true;
+        }
     };
     handler.called = false;
     ev.connect(&handler.callback);

@@ -93,3 +93,7 @@ cmake-build-*/
 .zig-cache/
 zig-out/
 zig-pkg/
+*.exe
+*.pdb
+# Ignore .pclx in root but keep test data
+/*.pclx
