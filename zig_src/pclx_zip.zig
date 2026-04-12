@@ -42,39 +42,13 @@ pub const ZipWriter = struct {
     }
 
     /// Add raw bytes to the archive.
-    pub fn addBytes(self: *ZipWriter, archive_name: []const u8, data: []const u8, compress: bool) !void {
+    pub fn addBytes(self: *ZipWriter, archive_name: []const u8, data: []const u8, _: bool) !void {
         const crc = std.hash.Crc32.hash(data);
         const uncompressed_size: u32 = @intCast(data.len);
 
-        var compressed_data: []const u8 = undefined;
-        var compressed_owned = false;
-        var method: u16 = 0; // store
-
-        if (compress and data.len > 0) {
-            const max_compressed = data.len + 512;
-            const compress_buf = try self.allocator.alloc(u8, max_compressed);
-            defer self.allocator.free(compress_buf);
-
-            var hist_buf: [flate.max_window_len]u8 = undefined;
-            var any_writer: Writer = .fixed(compress_buf);
-            var compressor = try flate.Compress.init(&any_writer, &hist_buf, .raw, .fastest);
-            try compressor.writer.writeAll(data);
-            try compressor.finish();
-
-            const compressed_len = max_compressed - any_writer.buffered().len;
-            if (compressed_len < data.len) {
-                const owned = try self.allocator.alloc(u8, compressed_len);
-                @memcpy(owned, compress_buf[0..compressed_len]);
-                compressed_data = owned;
-                compressed_owned = true;
-                method = 8; // deflate
-            } else {
-                compressed_data = data;
-            }
-        } else {
-            compressed_data = data;
-        }
-        defer if (compressed_owned) self.allocator.free(compressed_data);
+        // Zig 0.15 std flate Compress is incomplete; store entries uncompressed.
+        const compressed_data: []const u8 = data;
+        const method: u16 = 0; // store
 
         const compressed_size: u32 = @intCast(compressed_data.len);
         const local_offset: u32 = @intCast(self.offset);
