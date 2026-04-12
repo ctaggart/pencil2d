@@ -431,6 +431,34 @@ pub const Matrix = struct {
         return .{};
     }
 
+    /// Create a translation matrix.
+    pub fn translation(dx: f64, dy: f64) Matrix {
+        var m = identity();
+        m.m[2][0] = dx;
+        m.m[2][1] = dy;
+        return m;
+    }
+
+    /// Create a rotation matrix (angle in radians).
+    pub fn rotation(angle: f64) Matrix {
+        const c = @cos(angle);
+        const s = @sin(angle);
+        var m = identity();
+        m.m[0][0] = c;
+        m.m[0][1] = s;
+        m.m[1][0] = -s;
+        m.m[1][1] = c;
+        return m;
+    }
+
+    /// Create a scale matrix.
+    pub fn scale(sx: f64, sy: f64) Matrix {
+        var m = identity();
+        m.m[0][0] = sx;
+        m.m[1][1] = sy;
+        return m;
+    }
+
     /// Transform a point by this matrix.
     pub fn mapPoint(self: Matrix, p: Point) Point {
         const w = self.m[0][2] * p.x + self.m[1][2] * p.y + self.m[2][2];

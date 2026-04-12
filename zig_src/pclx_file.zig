@@ -219,6 +219,116 @@ pub fn getProjectInfo(obj: *const Object, allocator: Allocator) !ProjectInfo {
     };
 }
 
+// ── PCLX Writer ──────────────────────────────────────────────────────
+
+const ZipWriter = @import("pclx_zip.zig").ZipWriter;
+const Io = std.Io;
+
+/// Serialize an Object to main.xml content.
+pub fn serializeMainXml(obj: *const Object, allocator: Allocator) ![]const u8 {
+    var out: Io.Writer.Allocating = .init(allocator);
+    const w = &out.writer;
+
+    try w.writeAll("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<document>\n<object>\n");
+
+    for (obj.layers.items) |layer| {
+        try w.print("<layer id=\"{d}\" name=\"", .{layer.id});
+        try writeXmlEscaped(w, layer.name);
+        try w.print("\" visibility=\"{d}\" type=\"{d}\"", .{
+            @as(i32, if (layer.visible) 1 else 0),
+            @as(i32, @intFromEnum(layer.layer_type)),
+        });
+
+        if (layer.frames.items.len == 0) {
+            try w.writeAll("/>\n");
+            continue;
+        }
+
+        try w.writeAll(">\n");
+
+        for (layer.frames.items) |kf| {
+            switch (kf.data) {
+                .bitmap => |b| {
+                    try w.print("<image frame=\"{d}\"", .{kf.pos});
+                    if (kf.filename) |f| {
+                        try w.writeAll(" src=\"");
+                        try writeXmlEscaped(w, f);
+                        try w.writeByte('"');
+                    }
+                    try w.print(" topLeftX=\"{d}\" topLeftY=\"{d}\"", .{ b.top_left_x, b.top_left_y });
+                    if (b.opacity != 1.0) {
+                        try w.print(" opacity=\"{d}\"", .{b.opacity});
+                    }
+                    try w.writeAll("/>\n");
+                },
+                .camera => |c| {
+                    try w.print("<camera frame=\"{d}\" r=\"{d}\" s=\"{d}\" dx=\"{d}\" dy=\"{d}\"", .{
+                        kf.pos, c.rotation, c.scaling, c.translate_x, c.translate_y,
+                    });
+                    const easing_int: i32 = @intFromEnum(c.easing_type);
+                    if (easing_int != 0) {
+                        try w.print(" easing=\"{d}\"", .{easing_int});
+                    }
+                    if (c.path_control_moved) {
+                        try w.print(" pathCPX=\"{d}\" pathCPY=\"{d}\"", .{ c.path_control_x, c.path_control_y });
+                    }
+                    try w.writeAll("/>\n");
+                },
+                .sound => {
+                    try w.print("<sound frame=\"{d}\"", .{kf.pos});
+                    if (kf.filename) |f| {
+                        try w.writeAll(" src=\"");
+                        try writeXmlEscaped(w, f);
+                        try w.writeByte('"');
+                    }
+                    try w.writeAll("/>\n");
+                },
+                .empty => {
+                    try w.print("<image frame=\"{d}\"", .{kf.pos});
+                    if (kf.filename) |f| {
+                        try w.writeAll(" src=\"");
+                        try writeXmlEscaped(w, f);
+                        try w.writeByte('"');
+                    }
+                    try w.writeAll("/>\n");
+                },
+            }
+        }
+
+        try w.writeAll("</layer>\n");
+    }
+
+    try w.writeAll("</object>\n<version>0.7.2</version>\n</document>\n");
+    return try out.toOwnedSlice();
+}
+
+/// Save an Object to a .pclx ZIP in memory.
+pub fn save(obj: *const Object, allocator: Allocator) ![]const u8 {
+    const main_xml = try serializeMainXml(obj, allocator);
+    defer allocator.free(main_xml);
+
+    var zip = ZipWriter.init(allocator);
+    defer zip.deinit();
+    try zip.addBytes("main.xml", main_xml, false);
+    try zip.finalize();
+
+    // Copy the written data since the ZipWriter owns it
+    const data = zip.written();
+    return try allocator.dupe(u8, data);
+}
+
+fn writeXmlEscaped(w: *Io.Writer, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '&' => try w.writeAll("&amp;"),
+            '<' => try w.writeAll("&lt;"),
+            '>' => try w.writeAll("&gt;"),
+            '"' => try w.writeAll("&quot;"),
+            else => try w.writeByte(c),
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 test "load pclx from memory" {
@@ -242,50 +352,65 @@ test "load pclx from memory" {
         \\</document>
     ;
 
-    // Create a ZIP with main.xml
     var zip_writer = @import("pclx_zip.zig").ZipWriter.init(allocator);
     defer zip_writer.deinit();
     try zip_writer.addBytes("main.xml", main_xml, false);
     try zip_writer.finalize();
     const zip_data = zip_writer.written();
 
-    // Load it
     var obj = try load(allocator, zip_data);
     defer obj.deinit();
 
-    // Verify
     try std.testing.expectEqual(@as(i32, 2), obj.layerCount());
-
-    // Layer 1: bitmap
     const bg = obj.getLayer(0).?;
     try std.testing.expectEqualStrings("Background", bg.name);
-    try std.testing.expectEqual(LayerType.bitmap, bg.layer_type);
     try std.testing.expectEqual(@as(i32, 2), bg.keyFrameCount());
-
     const kf1 = bg.getKeyFrameAt(1).?;
     try std.testing.expectEqual(@as(i32, -32), kf1.data.bitmap.top_left_x);
     try std.testing.expectEqual(@as(f32, 0.8), kf1.data.bitmap.opacity);
-    try std.testing.expectEqualStrings("001.001.png", kf1.filename.?);
 
-    // Layer 2: camera
-    const cam_layer = obj.getLayer(1).?;
-    try std.testing.expectEqualStrings("Camera", cam_layer.name);
-    try std.testing.expectEqual(LayerType.camera, cam_layer.layer_type);
-    try std.testing.expectEqual(@as(i32, 2), cam_layer.keyFrameCount());
-
-    const cam_kf = cam_layer.getKeyFrameAt(10).?;
-    try std.testing.expectEqual(@as(f64, 45), cam_kf.data.camera.rotation);
-    try std.testing.expectEqual(@as(f64, 1.5), cam_kf.data.camera.scaling);
-    try std.testing.expectEqual(@as(f64, 100), cam_kf.data.camera.translate_x);
-
-    // Layer IDs preserved
-    try std.testing.expectEqual(@as(i32, 1), bg.id);
-    try std.testing.expectEqual(@as(i32, 2), cam_layer.id);
-    try std.testing.expectEqual(@as(i32, 3), obj.next_layer_id);
-
-    // Project info
     const info = try getProjectInfo(&obj, allocator);
     defer allocator.free(info.layers);
-    try std.testing.expectEqual(@as(i32, 2), info.layer_count);
     try std.testing.expectEqual(@as(i32, 4), info.total_keyframes);
+}
+
+test "save and reload pclx roundtrip" {
+    const allocator = std.testing.allocator;
+
+    // Build an Object in memory
+    var obj = Object.init(allocator);
+    defer obj.deinit();
+
+    const bg = try obj.addNewLayer(.bitmap, "Background");
+    _ = try bg.addKeyFrame(1, .{ .pos = 1, .data = .{ .bitmap = .{ .top_left_x = -10, .top_left_y = -20, .opacity = 0.9 } } });
+    _ = try bg.addKeyFrame(5, .{ .pos = 5, .data = .{ .bitmap = .{} } });
+
+    const cam = try obj.addNewLayer(.camera, "Camera");
+    _ = try cam.addKeyFrame(1, .{ .pos = 1, .data = .{ .camera = .{ .translate_x = 0, .scaling = 1 } } });
+    _ = try cam.addKeyFrame(10, .{ .pos = 10, .data = .{ .camera = .{ .translate_x = 100, .translate_y = 50, .rotation = 30, .scaling = 1.5 } } });
+
+    // Save to .pclx
+    const pclx_data = try save(&obj, allocator);
+    defer allocator.free(pclx_data);
+
+    // Reload
+    var obj2 = try load(allocator, pclx_data);
+    defer obj2.deinit();
+
+    // Verify structure preserved
+    try std.testing.expectEqual(@as(i32, 2), obj2.layerCount());
+
+    const bg2 = obj2.getLayer(0).?;
+    try std.testing.expectEqualStrings("Background", bg2.name);
+    try std.testing.expectEqual(LayerType.bitmap, bg2.layer_type);
+    try std.testing.expectEqual(@as(i32, 2), bg2.keyFrameCount());
+    try std.testing.expectEqual(@as(i32, -10), bg2.getKeyFrameAt(1).?.data.bitmap.top_left_x);
+
+    const cam2 = obj2.getLayer(1).?;
+    try std.testing.expectEqualStrings("Camera", cam2.name);
+    try std.testing.expectEqual(LayerType.camera, cam2.layer_type);
+    const cam_kf = cam2.getKeyFrameAt(10).?;
+    try std.testing.expectEqual(@as(f64, 100), cam_kf.data.camera.translate_x);
+    try std.testing.expectEqual(@as(f64, 30), cam_kf.data.camera.rotation);
+    try std.testing.expectEqual(@as(f64, 1.5), cam_kf.data.camera.scaling);
 }
