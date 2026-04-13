@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const net = std.Io.net;
 
 // ── C ABI types ──────────────────────────────────────────────────────
 
@@ -21,12 +22,13 @@ pub const McpCallback = *const fn (
 ) callconv(.c) usize;
 
 const ServerState = struct {
-    listener: ?std.net.Server = null,
+    listener: ?net.Server = null,
     accept_thread: ?std.Thread = null,
     callback: McpCallback = undefined,
     userdata: ?*anyopaque = null,
     should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     active_clients: std.atomic.Value(i32) = std.atomic.Value(i32).init(0),
+    threaded_io: Io.Threaded = undefined,
 };
 
 var g_server: ServerState = .{};
@@ -40,11 +42,14 @@ export fn zig_mcp_start(port: u16, callback: McpCallback, userdata: ?*anyopaque)
     g_server.callback = callback;
     g_server.userdata = userdata;
 
-    const address = std.net.Address.parseIp4("127.0.0.1", port) catch return -1;
-    g_server.listener = address.listen(.{ .reuse_address = true }) catch return -2;
+    g_server.threaded_io = Io.Threaded.init(std.heap.smp_allocator, .{});
+    const io = g_server.threaded_io.io();
+
+    var address = net.IpAddress.parseIp4("127.0.0.1", port) catch return -1;
+    g_server.listener = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch return -2;
 
     g_server.accept_thread = std.Thread.spawn(.{}, acceptLoop, .{}) catch {
-        if (g_server.listener) |*l| l.deinit();
+        if (g_server.listener) |*l| l.deinit(io);
         g_server.listener = null;
         return -3;
     };
@@ -56,9 +61,11 @@ export fn zig_mcp_start(port: u16, callback: McpCallback, userdata: ?*anyopaque)
 export fn zig_mcp_stop() void {
     g_server.should_stop.store(true, .release);
 
+    const io = g_server.threaded_io.io();
+
     // Close listener to unblock accept()
     if (g_server.listener) |*l| {
-        l.deinit();
+        l.deinit(io);
         g_server.listener = null;
     }
 
@@ -70,7 +77,7 @@ export fn zig_mcp_stop() void {
 
     // Wait for active clients to drain
     while (g_server.active_clients.load(.acquire) > 0) {
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        std.atomic.spinLoopHint();
     }
 }
 
@@ -78,9 +85,10 @@ export fn zig_mcp_stop() void {
 
 fn acceptLoop() void {
     const server = &(g_server.listener orelse return);
+    const io = g_server.threaded_io.io();
 
     while (!g_server.should_stop.load(.acquire)) {
-        const conn = server.accept() catch |err| {
+        const stream = server.accept(io) catch |err| {
             if (g_server.should_stop.load(.acquire)) break;
             std.debug.print("MCP accept error: {any}\n", .{err});
             continue;
@@ -88,8 +96,8 @@ fn acceptLoop() void {
 
         _ = g_server.active_clients.fetchAdd(1, .acq_rel);
 
-        const t = std.Thread.spawn(.{}, handleClient, .{conn}) catch {
-            conn.stream.close();
+        const t = std.Thread.spawn(.{}, handleClient, .{stream}) catch {
+            stream.close(io);
             _ = g_server.active_clients.fetchSub(1, .acq_rel);
             continue;
         };
@@ -97,9 +105,10 @@ fn acceptLoop() void {
     }
 }
 
-fn handleClient(conn: std.net.Server.Connection) void {
+fn handleClient(stream: net.Stream) void {
+    const io = g_server.threaded_io.io();
     defer {
-        conn.stream.close();
+        stream.close(io);
         _ = g_server.active_clients.fetchSub(1, .acq_rel);
     }
 
@@ -107,14 +116,14 @@ fn handleClient(conn: std.net.Server.Connection) void {
 
     var read_buf: [65536]u8 = undefined;
     var write_buf: [65536]u8 = undefined;
-    var reader = conn.stream.reader(&read_buf);
-    var writer = conn.stream.writer(&write_buf);
+    var reader = stream.reader(io, &read_buf);
+    var writer = stream.writer(io, &write_buf);
 
     const allocator = std.heap.smp_allocator;
 
     while (!g_server.should_stop.load(.acquire)) {
         // Read JSON-RPC frame
-        const msg = readFrame(allocator, reader.interface()) catch break;
+        const msg = readFrame(allocator, &reader.interface) catch break;
         defer allocator.free(msg);
 
         // Handle message

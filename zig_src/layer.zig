@@ -19,7 +19,7 @@ pub const Layer = struct {
     name: []const u8 = "",
     name_owned: bool = false,
     visible: bool = true,
-    frames: std.ArrayList(KeyFrame) = .{},
+    frames: std.ArrayList(KeyFrame) = .empty,
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, id: i32, layer_type: LayerType, name: []const u8) !Layer {

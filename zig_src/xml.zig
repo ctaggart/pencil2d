@@ -155,7 +155,7 @@ const Parser = struct {
 
     fn unescapeXml(self: *Parser, s: []const u8) ![]const u8 {
         if (std.mem.indexOf(u8, s, "&") == null) return s;
-        var buf: std.ArrayList(u8) = .{};
+        var buf: std.ArrayList(u8) = .empty;
         var i: usize = 0;
         while (i < s.len) {
             if (s[i] == '&') {
@@ -204,7 +204,7 @@ const Parser = struct {
         const tag = self.parseName();
 
         // Parse attributes
-        var attrs: std.ArrayList(Attribute) = .{};
+        var attrs: std.ArrayList(Attribute) = .empty;
         while (true) {
             self.skipWhitespace();
             if (self.pos >= self.src.len) break;
@@ -235,7 +235,7 @@ const Parser = struct {
         if (self.peek() == '>') self.pos += 1; // skip >
 
         // Parse children and text
-        var children: std.ArrayList(Element) = .{};
+        var children: std.ArrayList(Element) = .empty;
         var text: ?[]const u8 = null;
 
         while (self.pos < self.src.len) {

@@ -17,11 +17,11 @@ pub const VertexRef = struct {
 /// A single cubic Bezier curve with control points, pressure, and style.
 pub const BezierCurve = struct {
     origin: Point = .{ .x = 0, .y = 0 },
-    vertices: std.ArrayList(Point) = .{},
-    c1: std.ArrayList(Point) = .{},
-    c2: std.ArrayList(Point) = .{},
-    pressure: std.ArrayList(f32) = .{},
-    selected: std.ArrayList(bool) = .{},
+    vertices: std.ArrayList(Point) = .empty,
+    c1: std.ArrayList(Point) = .empty,
+    c2: std.ArrayList(Point) = .empty,
+    pressure: std.ArrayList(f32) = .empty,
+    selected: std.ArrayList(bool) = .empty,
 
     color_number: i32 = 0,
     width: f32 = 2.0,
@@ -107,7 +107,7 @@ pub const BezierCurve = struct {
 
 /// A fill region defined by vertex references.
 pub const BezierArea = struct {
-    vertex_refs: std.ArrayList(VertexRef) = .{},
+    vertex_refs: std.ArrayList(VertexRef) = .empty,
     color_number: i32 = 0,
     is_selected: bool = false,
 
@@ -119,8 +119,8 @@ pub const BezierArea = struct {
 
 /// A vector image containing curves and fill areas.
 pub const VectorImage = struct {
-    curves: std.ArrayList(BezierCurve) = .{},
-    areas: std.ArrayList(BezierArea) = .{},
+    curves: std.ArrayList(BezierCurve) = .empty,
+    areas: std.ArrayList(BezierArea) = .empty,
     opacity: f64 = 1.0,
     allocator: Allocator,
 

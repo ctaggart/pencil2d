@@ -4,6 +4,7 @@ const pencil2d = @import("pencil2d.zig");
 const Point = pencil2d.Point;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const net = std.Io.net;
 const Object = pencil2d.object.Object;
 const pclx_file = pencil2d.pclx_file;
 
@@ -508,6 +509,8 @@ fn handleMatrixTransform(allocator: Allocator, args: ?std.json.Value) anyerror![
 
 var g_project: ?*Object = null;
 var g_project_allocator: Allocator = std.heap.smp_allocator;
+var g_io: Io = undefined;
+var g_io_initialized: bool = false;
 
 fn getProject() ?*Object {
     return g_project;
@@ -529,14 +532,22 @@ fn handleProjectOpen(allocator: Allocator, args: ?std.json.Value) anyerror![]con
     const path = getStr(args, "path") orelse return std.fmt.allocPrint(allocator, "\"error: missing path argument\"", .{});
 
     // Read file from disk
-    const file = std.fs.openFileAbsolute(path, .{}) catch |err| {
+    const io = g_io;
+    const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         return std.fmt.allocPrint(allocator, "\"error: cannot open file: {s}\"", .{@errorName(err)});
     };
-    defer file.close();
-    const data = file.readToEndAlloc(g_project_allocator, 100 * 1024 * 1024) catch |err| {
+    defer file.close(io);
+
+    // Read file contents via reader → allocating writer
+    var read_buf: [8192]u8 = undefined;
+    var file_reader = Io.File.reader(file, io, &read_buf);
+    var aw: Io.Writer.Allocating = .init(g_project_allocator);
+    _ = file_reader.interface.streamRemaining(&aw.writer) catch |err| {
+        aw.deinit();
         return std.fmt.allocPrint(allocator, "\"error: cannot read file: {s}\"", .{@errorName(err)});
     };
-    defer g_project_allocator.free(data);
+    const data = aw.written();
+    defer aw.deinit();
 
     // Close existing project
     if (g_project) |old| {
@@ -682,11 +693,12 @@ fn handleProjectSave(allocator: Allocator, args: ?std.json.Value) anyerror![]con
     };
     defer g_project_allocator.free(pclx_data);
 
-    const file = std.fs.createFileAbsolute(path, .{}) catch |err| {
+    const io = g_io;
+    const file = Io.Dir.createFileAbsolute(io, path, .{}) catch |err| {
         return std.fmt.allocPrint(allocator, "\"error: cannot create file: {s}\"", .{@errorName(err)});
     };
-    defer file.close();
-    file.writeAll(pclx_data) catch |err| {
+    defer file.close(io);
+    file.writeStreamingAll(io, pclx_data) catch |err| {
         return std.fmt.allocPrint(allocator, "\"error: write failed: {s}\"", .{@errorName(err)});
     };
 
@@ -809,60 +821,61 @@ fn serveConnection(allocator: Allocator, reader: *Io.Reader, writer: *Io.Writer)
     }
 }
 
-fn handleTcpClient(conn: std.net.Server.Connection, allocator: Allocator) void {
-    defer conn.stream.close();
+fn handleTcpClient(stream: net.Stream, allocator: Allocator, io: Io) void {
+    defer stream.close(io);
     std.debug.print("MCP client connected\n", .{});
     var read_buf: [65536]u8 = undefined;
     var write_buf: [65536]u8 = undefined;
-    var reader = conn.stream.reader(&read_buf);
-    var writer = conn.stream.writer(&write_buf);
-    serveConnection(allocator, reader.interface(), &writer.interface);
+    var reader = net.Stream.Reader.init(stream, io, &read_buf);
+    var writer = net.Stream.Writer.init(stream, io, &write_buf);
+    serveConnection(allocator, &reader.interface, &writer.interface);
     std.debug.print("MCP client disconnected\n", .{});
 }
 
-fn runTcpServer(port: u16, allocator: Allocator) !void {
-    const address = try std.net.Address.parseIp4("127.0.0.1", port);
-    var tcp_server = address.listen(.{}) catch |err| {
+fn runTcpServer(port: u16, allocator: Allocator, io: Io) !void {
+    var address = try net.IpAddress.parseIp4("127.0.0.1", port);
+    var tcp_server = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
         std.debug.print("Failed to listen: {any}\n", .{err});
         return err;
     };
-    defer tcp_server.deinit();
+    defer tcp_server.deinit(io);
     std.debug.print("Pencil2D MCP server listening on 127.0.0.1:{d}\n", .{port});
 
     while (true) {
-        const conn = tcp_server.accept() catch |err| {
+        const stream = tcp_server.accept(io) catch |err| {
             std.debug.print("Accept error: {any}\n", .{err});
             continue;
         };
-        const t = std.Thread.spawn(.{}, handleTcpClient, .{ conn, allocator }) catch continue;
+        const t = std.Thread.spawn(.{}, handleTcpClient, .{ stream, allocator, io }) catch continue;
         t.detach();
     }
 }
 
-fn runStdioServer(allocator: Allocator) void {
+fn runStdioServer(allocator: Allocator, io: Io) void {
     var read_buf: [65536]u8 = undefined;
     var write_buf: [65536]u8 = undefined;
-    var reader = std.fs.File.stdin().reader(&read_buf);
-    var writer = std.fs.File.stdout().writer(&write_buf);
+    var reader = Io.File.reader(Io.File.stdin(), io, &read_buf);
+    var writer = Io.File.writer(Io.File.stdout(), io, &write_buf);
     serveConnection(allocator, &reader.interface, &writer.interface);
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
 
-pub fn main() !void {
-    const allocator = std.heap.smp_allocator;
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
+    g_io = io;
+    g_io_initialized = true;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var args_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer args_iter.deinit();
+    _ = args_iter.next(); // skip program name
 
     var port: ?u16 = null;
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
+    while (args_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--port") or std.mem.eql(u8, arg, "--mcp")) {
-            i += 1;
-            if (i < args.len) {
-                port = std.fmt.parseInt(u16, args[i], 10) catch {
+            if (args_iter.next()) |port_arg| {
+                port = std.fmt.parseInt(u16, port_arg, 10) catch {
                     std.debug.print("Invalid port number\n", .{});
                     std.process.exit(1);
                 };
@@ -883,8 +896,8 @@ pub fn main() !void {
     }
 
     if (port) |p| {
-        try runTcpServer(p, allocator);
+        try runTcpServer(p, allocator, io);
     } else {
-        runStdioServer(allocator);
+        runStdioServer(allocator, io);
     }
 }

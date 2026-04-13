@@ -25,8 +25,8 @@ pub const ColorRef = struct {
 };
 
 pub const Object = struct {
-    layers: std.ArrayList(*Layer) = .{},
-    palette: std.ArrayList(ColorRef) = .{},
+    layers: std.ArrayList(*Layer) = .empty,
+    palette: std.ArrayList(ColorRef) = .empty,
     file_path: ?[]const u8 = null,
     file_path_owned: bool = false,
     is_modified: bool = false,
