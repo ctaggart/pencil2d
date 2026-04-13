@@ -5,6 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const xml = @import("xml.zig");
 const ZipReader = @import("pclx_zip.zig").ZipReader;
+const ZipWriter = @import("pclx_zip.zig").ZipWriter;
 const Object = @import("object.zig").Object;
 const ColorRef = @import("object.zig").ColorRef;
 const Layer = @import("layer.zig").Layer;
@@ -13,6 +14,7 @@ const KeyFrame = @import("keyframe.zig").KeyFrame;
 const BitmapData = @import("keyframe.zig").BitmapData;
 const CameraData = @import("keyframe.zig").CameraData;
 const SoundData = @import("keyframe.zig").SoundData;
+const png = @import("png.zig");
 
 pub const PclxError = error{
     MainXmlNotFound,
@@ -52,7 +54,7 @@ pub fn load(allocator: Allocator, pclx_data: []const u8) !Object {
     if (doc.root.findChild("object")) |obj_elem| {
         var layer_iter = obj_elem.childrenByTag("layer");
         while (layer_iter.next()) |layer_elem| {
-            try loadLayer(&obj, layer_elem);
+            try loadLayer(&obj, layer_elem, &zip);
         }
     }
 
@@ -62,7 +64,7 @@ pub fn load(allocator: Allocator, pclx_data: []const u8) !Object {
     return obj;
 }
 
-fn loadLayer(obj: *Object, elem: *const xml.Element) !void {
+fn loadLayer(obj: *Object, elem: *const xml.Element, zip: *ZipReader) !void {
     const layer_type_int = elem.attrInt("type", 0);
     const layer_type: LayerType = switch (layer_type_int) {
         1 => .bitmap,
@@ -83,7 +85,7 @@ fn loadLayer(obj: *Object, elem: *const xml.Element) !void {
 
     // Load keyframes based on layer type
     switch (layer_type) {
-        .bitmap => try loadBitmapFrames(layer, elem),
+        .bitmap => try loadBitmapFrames(layer, elem, zip),
         .camera => try loadCameraFrames(layer, elem),
         .sound => try loadSoundFrames(layer, elem),
         .vector => try loadVectorFrames(layer, elem),
@@ -91,7 +93,7 @@ fn loadLayer(obj: *Object, elem: *const xml.Element) !void {
     }
 }
 
-fn loadBitmapFrames(layer: *Layer, elem: *const xml.Element) !void {
+fn loadBitmapFrames(layer: *Layer, elem: *const xml.Element, zip: *ZipReader) !void {
     var iter = elem.childrenByTag("image");
     while (iter.next()) |img| {
         const frame = img.attrInt("frame", 1);
@@ -100,16 +102,41 @@ fn loadBitmapFrames(layer: *Layer, elem: *const xml.Element) !void {
         const y = img.attrInt("topLeftY", 0);
         const opacity = img.attrFloat("opacity", 1.0);
 
-        var kf = KeyFrame{
-            .pos = frame,
-            .data = .{ .bitmap = .{
-                .top_left_x = x,
-                .top_left_y = y,
-                .opacity = @floatCast(opacity),
-            } },
+        var bitmap = BitmapData{
+            .top_left_x = x,
+            .top_left_y = y,
+            .opacity = @floatCast(opacity),
         };
 
-        // Store the source filename for later loading
+        // Try to extract and decode PNG from ZIP
+        if (src) |src_name| {
+            // Look for the file in the ZIP (may be in data/ subdirectory)
+            var zi: usize = 0;
+            while (zi < zip.count()) : (zi += 1) {
+                const entry_name = zip.entryName(zi) orelse continue;
+                if (std.mem.eql(u8, entry_name, src_name) or
+                    (std.mem.endsWith(u8, entry_name, src_name) and
+                        entry_name.len > src_name.len and entry_name[entry_name.len - src_name.len - 1] == '/'))
+                {
+                    const png_data = zip.extract(zi, layer.allocator) catch continue;
+                    defer layer.allocator.free(png_data);
+
+                    var decoded = png.decode(layer.allocator, png_data) catch continue;
+                    bitmap.width = decoded.width;
+                    bitmap.height = decoded.height;
+                    bitmap.pixels = decoded.data;
+                    // Don't deinit decoded — we took ownership of .data
+                    decoded.data = &.{};
+                    break;
+                }
+            }
+        }
+
+        var kf = KeyFrame{
+            .pos = frame,
+            .data = .{ .bitmap = bitmap },
+        };
+
         if (src) |s| {
             kf.filename = try layer.allocator.dupe(u8, s);
         }
@@ -221,7 +248,6 @@ pub fn getProjectInfo(obj: *const Object, allocator: Allocator) !ProjectInfo {
 
 // ── PCLX Writer ──────────────────────────────────────────────────────
 
-const ZipWriter = @import("pclx_zip.zig").ZipWriter;
 const Io = std.Io;
 
 /// Serialize an Object to main.xml content.
@@ -250,10 +276,13 @@ pub fn serializeMainXml(obj: *const Object, allocator: Allocator) ![]const u8 {
             switch (kf.data) {
                 .bitmap => |b| {
                     try w.print("<image frame=\"{d}\"", .{kf.pos});
+                    // Use existing filename or generate one: {layerId:03}.{frame:03}.png
                     if (kf.filename) |f| {
                         try w.writeAll(" src=\"");
                         try writeXmlEscaped(w, f);
                         try w.writeByte('"');
+                    } else if (b.pixels != null) {
+                        try w.print(" src=\"{d:0>3}.{d:0>3}.png\"", .{ layer.id, kf.pos });
                     }
                     try w.print(" topLeftX=\"{d}\" topLeftY=\"{d}\"", .{ b.top_left_x, b.top_left_y });
                     if (b.opacity != 1.0) {
@@ -303,6 +332,7 @@ pub fn serializeMainXml(obj: *const Object, allocator: Allocator) ![]const u8 {
 }
 
 /// Save an Object to a .pclx ZIP in memory.
+/// Encodes bitmap frame pixels as PNGs.
 pub fn save(obj: *const Object, allocator: Allocator) ![]const u8 {
     const main_xml = try serializeMainXml(obj, allocator);
     defer allocator.free(main_xml);
@@ -310,9 +340,28 @@ pub fn save(obj: *const Object, allocator: Allocator) ![]const u8 {
     var zip = ZipWriter.init(allocator);
     defer zip.deinit();
     try zip.addBytes("main.xml", main_xml, false);
-    try zip.finalize();
 
-    // Copy the written data since the ZipWriter owns it
+    // Encode and add bitmap frame PNGs
+    for (obj.layers.items) |layer| {
+        for (layer.frames.items) |kf| {
+            if (kf.data == .bitmap) {
+                const b = kf.data.bitmap;
+                if (b.pixels != null and b.width > 0 and b.height > 0) {
+                    // Use existing filename or generate one
+                    var name_buf: [32]u8 = undefined;
+                    const filename = kf.filename orelse blk: {
+                        const len = std.fmt.bufPrint(&name_buf, "{d:0>3}.{d:0>3}.png", .{ layer.id, kf.pos }) catch continue;
+                        break :blk len;
+                    };
+                    const png_data = png.encode(allocator, b.pixels.?, b.width, b.height) catch continue;
+                    defer allocator.free(png_data);
+                    try zip.addBytes(filename, png_data, false);
+                }
+            }
+        }
+    }
+
+    try zip.finalize();
     const data = zip.written();
     return try allocator.dupe(u8, data);
 }
@@ -413,4 +462,38 @@ test "save and reload pclx roundtrip" {
     try std.testing.expectEqual(@as(f64, 100), cam_kf.data.camera.translate_x);
     try std.testing.expectEqual(@as(f64, 30), cam_kf.data.camera.rotation);
     try std.testing.expectEqual(@as(f64, 1.5), cam_kf.data.camera.scaling);
+}
+
+test "save and reload pclx with pixel data" {
+    const allocator = std.testing.allocator;
+
+    var obj = Object.init(allocator);
+    defer obj.deinit();
+
+    const bg = try obj.addNewLayer(.bitmap, "Art");
+    // Create a 4x4 red frame with pixel data
+    var bitmap = try BitmapData.create(allocator, 4, 4, -2, -2);
+    bitmap.drawRect(-2, -2, 4, 4, .{ 255, 0, 0, 255 }); // fill red
+    var kf = KeyFrame{ .pos = 1, .data = .{ .bitmap = bitmap } };
+    kf.filename = try allocator.dupe(u8, "001.001.png");
+    _ = try bg.addKeyFrame(1, kf);
+
+    // Save
+    const pclx_data = try save(&obj, allocator);
+    defer allocator.free(pclx_data);
+
+    // Reload
+    var obj2 = try load(allocator, pclx_data);
+    defer obj2.deinit();
+
+    // Verify pixel data survived roundtrip
+    const bg2 = obj2.getLayer(0).?;
+    const kf2 = bg2.getKeyFrameAt(1).?;
+    try std.testing.expectEqual(@as(u32, 4), kf2.data.bitmap.width);
+    try std.testing.expectEqual(@as(u32, 4), kf2.data.bitmap.height);
+    try std.testing.expect(kf2.data.bitmap.pixels != null);
+    // First pixel should be red
+    const px = kf2.data.bitmap.getPixel(-2, -2).?;
+    try std.testing.expectEqual(@as(u8, 255), px[0]); // R
+    try std.testing.expectEqual(@as(u8, 0), px[1]); // G
 }
