@@ -27,7 +27,23 @@ jobs:
         run: zig fmt --check zig_src/
 
       - name: Run Zig tests
-        run: zig test zig_src/pencil2d.zig
+        run: zig build zig-test
 
-      - name: Build MCP server
-        run: zig build-exe zig_src/mcp_server.zig --name pencil2d-mcp
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0-dev.3146+0606af509
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.2'
+          arch: 'win64_msvc2022_64'
+
+      - name: Build Pencil2D
+        run: zig build -Dqt-prefix="$env:Qt6_DIR"

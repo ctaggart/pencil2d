@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.subsystem = .Windows;
-    configurePencil2d(b, exe, qt_prefix, false);
+    configurePencil2d(b, exe, qt_prefix, zpix_mod, false);
     b.installArtifact(exe);
 
     // ── pencil2d_tests executable ────────────────────────────────────
@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     tests_exe.subsystem = .Console;
-    configurePencil2d(b, tests_exe, qt_prefix, true);
+    configurePencil2d(b, tests_exe, qt_prefix, zpix_mod, true);
     b.installArtifact(tests_exe);
 
     // ── run steps ────────────────────────────────────────────────────
@@ -72,6 +72,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    mcp_mod.addImport("zpix", zpix_mod);
 
     const mcp_exe = b.addExecutable(.{
         .name = "pencil2d-mcp",
@@ -96,6 +97,7 @@ fn configurePencil2d(
     b: *std.Build,
     exe: *std.Build.Step.Compile,
     qt_prefix: []const u8,
+    zpix_mod: *std.Build.Module,
     is_test: bool,
 ) void {
     const mod = exe.root_module;
@@ -122,6 +124,7 @@ fn configurePencil2d(
             .optimize = mod.optimize,
         }),
     });
+    zig_lib.root_module.addImport("zpix", zpix_mod);
     mod.addObject(zig_lib);
 
     // ── Embedded MCP server (separate object — has extern C deps) ────
