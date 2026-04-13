@@ -415,6 +415,201 @@ pub fn smudgeBlend(
     }
 }
 
+// ── Liang-Barsky Line Clipping ──────────────────────────────────────
+// Clips a line segment to a rectangular window.
+
+pub const ClipResult = struct {
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    visible: bool,
+};
+
+/// Clip line (x0,y0)-(x1,y1) to rectangle (xmin,ymin)-(xmax,ymax).
+pub fn clipLine(x0: f64, y0: f64, x1: f64, y1: f64, xmin: f64, ymin: f64, xmax: f64, ymax: f64) ClipResult {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    var t0: f64 = 0;
+    var t1: f64 = 1;
+
+    const p = [4]f64{ -dx, dx, -dy, dy };
+    const q = [4]f64{ x0 - xmin, xmax - x0, y0 - ymin, ymax - y0 };
+
+    for (0..4) |i| {
+        if (p[i] == 0) {
+            if (q[i] < 0) return .{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0, .visible = false };
+        } else {
+            const r = q[i] / p[i];
+            if (p[i] < 0) {
+                t0 = @max(t0, r);
+            } else {
+                t1 = @min(t1, r);
+            }
+            if (t0 > t1) return .{ .x0 = 0, .y0 = 0, .x1 = 0, .y1 = 0, .visible = false };
+        }
+    }
+
+    return .{
+        .x0 = x0 + t0 * dx,
+        .y0 = y0 + t0 * dy,
+        .x1 = x0 + t1 * dx,
+        .y1 = y0 + t1 * dy,
+        .visible = true,
+    };
+}
+
+// ── Polyline Tool ───────────────────────────────────────────────────
+// Accumulates points for multi-segment line/polygon construction.
+
+pub const Polyline = struct {
+    points: [256]Point = undefined,
+    count: usize = 0,
+    closed: bool = false,
+
+    pub fn addPoint(self: *Polyline, p: Point) void {
+        if (self.count < self.points.len) {
+            self.points[self.count] = p;
+            self.count += 1;
+        }
+    }
+
+    pub fn lastPoint(self: Polyline) ?Point {
+        if (self.count == 0) return null;
+        return self.points[self.count - 1];
+    }
+
+    pub fn clear(self: *Polyline) void {
+        self.count = 0;
+        self.closed = false;
+    }
+
+    /// Close the polyline (connect last to first).
+    pub fn close(self: *Polyline) void {
+        self.closed = true;
+    }
+
+    /// Get polyline as slice.
+    pub fn getPoints(self: *const Polyline) []const Point {
+        return self.points[0..self.count];
+    }
+
+    /// Total length of the polyline.
+    pub fn length(self: Polyline) f64 {
+        if (self.count < 2) return 0;
+        var total: f64 = 0;
+        for (1..self.count) |i| {
+            const dx = self.points[i].x - self.points[i - 1].x;
+            const dy = self.points[i].y - self.points[i - 1].y;
+            total += @sqrt(dx * dx + dy * dy);
+        }
+        if (self.closed and self.count > 2) {
+            const dx = self.points[0].x - self.points[self.count - 1].x;
+            const dy = self.points[0].y - self.points[self.count - 1].y;
+            total += @sqrt(dx * dx + dy * dy);
+        }
+        return total;
+    }
+
+    /// Check if point is near the first point (for closing).
+    pub fn isNearStart(self: Polyline, p: Point, threshold: f64) bool {
+        if (self.count < 3) return false;
+        const dx = p.x - self.points[0].x;
+        const dy = p.y - self.points[0].y;
+        return @sqrt(dx * dx + dy * dy) < threshold;
+    }
+};
+
+// ── LRU Cache ───────────────────────────────────────────────────────
+// Generic fixed-capacity cache with least-recently-used eviction.
+
+pub fn LruCache(comptime K: type, comptime V: type, comptime capacity: usize) type {
+    return struct {
+        keys: [capacity]K = undefined,
+        values: [capacity]V = undefined,
+        ages: [capacity]u64 = [_]u64{0} ** capacity,
+        count: usize = 0,
+        clock: u64 = 0,
+
+        const Self = @This();
+
+        pub fn get(self: *Self, key: K) ?*V {
+            for (0..self.count) |i| {
+                if (self.keys[i] == key) {
+                    self.clock += 1;
+                    self.ages[i] = self.clock;
+                    return &self.values[i];
+                }
+            }
+            return null;
+        }
+
+        pub fn put(self: *Self, key: K, value: V) ?V {
+            // Check if exists
+            for (0..self.count) |i| {
+                if (self.keys[i] == key) {
+                    const old = self.values[i];
+                    self.values[i] = value;
+                    self.clock += 1;
+                    self.ages[i] = self.clock;
+                    return old;
+                }
+            }
+            // Insert
+            self.clock += 1;
+            if (self.count < capacity) {
+                self.keys[self.count] = key;
+                self.values[self.count] = value;
+                self.ages[self.count] = self.clock;
+                self.count += 1;
+                return null;
+            }
+            // Evict LRU
+            var min_idx: usize = 0;
+            for (1..self.count) |i| {
+                if (self.ages[i] < self.ages[min_idx]) min_idx = i;
+            }
+            const evicted = self.values[min_idx];
+            self.keys[min_idx] = key;
+            self.values[min_idx] = value;
+            self.ages[min_idx] = self.clock;
+            return evicted;
+        }
+
+        pub fn contains(self: *Self, key: K) bool {
+            for (0..self.count) |i| {
+                if (self.keys[i] == key) return true;
+            }
+            return false;
+        }
+    };
+}
+
+// ── Tiled Buffer ────────────────────────────────────────────────────
+// Sparse tile grid for efficient large-canvas operations.
+
+pub const TILE_SIZE: u32 = 64;
+
+pub const TileCoord = struct {
+    tx: i32,
+    ty: i32,
+
+    pub fn fromPixel(px: i32, py: i32) TileCoord {
+        return .{
+            .tx = @divFloor(px, @as(i32, TILE_SIZE)),
+            .ty = @divFloor(py, @as(i32, TILE_SIZE)),
+        };
+    }
+
+    pub fn toPixelX(self: TileCoord) i32 {
+        return self.tx * @as(i32, TILE_SIZE);
+    }
+
+    pub fn toPixelY(self: TileCoord) i32 {
+        return self.ty * @as(i32, TILE_SIZE);
+    }
+};
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 test "StrokeInterpolator smoothing none" {
@@ -538,4 +733,75 @@ test "smudgeBlend" {
     const idx = (1 * 4 + 2) * 4;
     try std.testing.expect(pixels[idx] > 0); // has some red
     try std.testing.expect(pixels[idx + 2] > 0); // still has blue
+}
+
+test "clipLine fully inside" {
+    const r = clipLine(10, 10, 90, 90, 0, 0, 100, 100);
+    try std.testing.expect(r.visible);
+    try std.testing.expectEqual(@as(f64, 10), r.x0);
+    try std.testing.expectEqual(@as(f64, 90), r.x1);
+}
+
+test "clipLine partially outside" {
+    const r = clipLine(-50, 50, 150, 50, 0, 0, 100, 100);
+    try std.testing.expect(r.visible);
+    try std.testing.expectEqual(@as(f64, 0), r.x0);
+    try std.testing.expectEqual(@as(f64, 100), r.x1);
+}
+
+test "clipLine fully outside" {
+    const r = clipLine(-50, -50, -10, -10, 0, 0, 100, 100);
+    try std.testing.expect(!r.visible);
+}
+
+test "Polyline basic" {
+    var pl = Polyline{};
+    pl.addPoint(.{ .x = 0, .y = 0 });
+    pl.addPoint(.{ .x = 100, .y = 0 });
+    pl.addPoint(.{ .x = 100, .y = 100 });
+
+    try std.testing.expectEqual(@as(usize, 3), pl.count);
+    try std.testing.expectEqual(@as(f64, 200), pl.length());
+
+    try std.testing.expect(pl.isNearStart(.{ .x = 2, .y = 2 }, 5));
+    try std.testing.expect(!pl.isNearStart(.{ .x = 50, .y = 50 }, 5));
+}
+
+test "Polyline closed" {
+    var pl = Polyline{};
+    pl.addPoint(.{ .x = 0, .y = 0 });
+    pl.addPoint(.{ .x = 100, .y = 0 });
+    pl.addPoint(.{ .x = 100, .y = 100 });
+    pl.close();
+
+    try std.testing.expect(pl.closed);
+    // Closed length includes distance from last to first
+    try std.testing.expect(pl.length() > 200);
+}
+
+test "LruCache basic" {
+    var cache = LruCache(i32, []const u8, 3){};
+    _ = cache.put(1, "one");
+    _ = cache.put(2, "two");
+    _ = cache.put(3, "three");
+
+    try std.testing.expectEqualStrings("two", cache.get(2).?.*);
+
+    // Evict LRU (1, since 2 was just accessed)
+    const evicted = cache.put(4, "four");
+    try std.testing.expect(evicted != null);
+    try std.testing.expect(!cache.contains(1)); // 1 evicted
+    try std.testing.expect(cache.contains(2)); // 2 still there
+}
+
+test "TileCoord fromPixel" {
+    const tc = TileCoord.fromPixel(130, 70);
+    try std.testing.expectEqual(@as(i32, 2), tc.tx); // 130/64 = 2
+    try std.testing.expectEqual(@as(i32, 1), tc.ty); // 70/64 = 1
+    try std.testing.expectEqual(@as(i32, 128), tc.toPixelX());
+    try std.testing.expectEqual(@as(i32, 64), tc.toPixelY());
+
+    // Negative coords
+    const neg = TileCoord.fromPixel(-10, -10);
+    try std.testing.expectEqual(@as(i32, -1), neg.tx);
 }
