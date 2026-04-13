@@ -15,6 +15,7 @@ pub const vector_image = @import("vector_image.zig");
 pub const mcp_embedded = @import("mcp_embedded.zig");
 pub const managers = @import("managers.zig");
 pub const tools = @import("tools.zig");
+pub const editor = @import("editor.zig");
 comptime {
     _ = &pclx_zip;
     _ = &cli;
@@ -28,6 +29,7 @@ comptime {
     _ = &mcp_embedded;
     _ = &managers;
     _ = &tools;
+    _ = &editor;
 }
 
 pub const pi: f64 = 3.14159265358979323846;
