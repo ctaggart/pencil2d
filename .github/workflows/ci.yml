@@ -47,4 +47,5 @@ jobs:
           arch: 'win64_msvc2022_64'
 
       - name: Build Pencil2D
-        run: zig build -Dqt-prefix="$env:Qt6_DIR"
+        shell: pwsh
+        run: zig build "-Dqt-prefix=$env:QT_ROOT_DIR"
