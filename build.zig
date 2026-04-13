@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .link_libcpp = true,
+            .link_libcpp = if (is_win) null else true,
         }),
     });
     if (is_win) exe.subsystem = .Windows;
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .link_libcpp = true,
+            .link_libcpp = if (is_win) null else true,
         }),
     });
     if (is_win) tests_exe.subsystem = .Console;
