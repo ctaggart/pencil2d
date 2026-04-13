@@ -164,28 +164,36 @@ fn configurePencil2d(
     }
 
     // ── Qt tool executables ──────────────────────────────────────────
-    // Homebrew Qt 6.11+ puts tools in share/qt/libexec/; older installs use bin/
-    const qt_tool_dir = if (is_mac) "share/qt/libexec" else "bin";
+    // Different Qt installations put tools in different places:
+    //   Homebrew Qt 6.11+: share/qt/libexec/
+    //   aqtinstall (CI):   libexec/ or bin/
+    //   System Qt:         bin/
     const exe_ext = if (is_win) ".exe" else "";
+    const qt_tool_dir = findQtToolDir(b, qt_prefix, exe_ext);
+
+    // On macOS, Qt tools (moc/uic/rcc) need to find Qt frameworks at runtime.
+    // When Qt is installed to a non-standard prefix (e.g. CI via aqtinstall),
+    // we must set DYLD_FRAMEWORK_PATH so the tools can load their dependencies.
+    const qt_lib_dir: ?[]const u8 = if (is_mac) b.fmt("{s}/lib", .{qt_prefix}) else null;
 
     // ── UIC: generate ui_*.h from .ui files ──────────────────────────
     const uic_path = b.fmt("{s}/{s}/uic{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
-    const uic_dir = runUic(b, uic_path);
+    const uic_dir = runUic(b, uic_path, qt_lib_dir);
     mod.addIncludePath(uic_dir);
 
     // ── MOC: generate moc_*.cpp from Q_OBJECT headers ────────────────
     const moc_path = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
-    runMoc(b, mod, moc_path, qt_prefix, cpp_flags, core_moc_headers, is_mac);
+    runMoc(b, mod, moc_path, qt_prefix, cpp_flags, core_moc_headers, is_mac, qt_lib_dir);
     if (!is_test) {
-        runMoc(b, mod, moc_path, qt_prefix, cpp_flags, app_moc_headers, is_mac);
+        runMoc(b, mod, moc_path, qt_prefix, cpp_flags, app_moc_headers, is_mac, qt_lib_dir);
     }
 
     // ── RCC: generate qrc_*.cpp from .qrc files ─────────────────────
     const rcc_path = b.fmt("{s}/{s}/rcc{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
     if (is_test) {
-        runRcc(b, mod, rcc_path, cpp_flags, test_qrc_files);
+        runRcc(b, mod, rcc_path, cpp_flags, test_qrc_files, qt_lib_dir);
     } else {
-        runRcc(b, mod, rcc_path, cpp_flags, qrc_files);
+        runRcc(b, mod, rcc_path, cpp_flags, qrc_files, qt_lib_dir);
     }
 
     // ── C++ source files ─────────────────────────────────────────────
@@ -261,13 +269,32 @@ fn configurePencil2d(
 // Qt tool runners
 // ─────────────────────────────────────────────────────────────────────
 
-fn runUic(b: *std.Build, uic_path: []const u8) std.Build.LazyPath {
+/// Probe common Qt tool directories and return the first one containing "moc".
+fn findQtToolDir(b: *std.Build, qt_prefix: []const u8, exe_ext: []const u8) []const u8 {
+    const candidates = [_][]const u8{
+        "share/qt/libexec", // Homebrew Qt 6.11+
+        "libexec",          // aqtinstall on macOS
+        "bin",              // system Qt / Windows / Linux
+    };
+    if (std.fs.path.isAbsolute(qt_prefix)) {
+        for (candidates) |dir| {
+            const probe = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, dir, exe_ext });
+            std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch continue;
+            return dir;
+        }
+    }
+    // Fall back to "bin" if nothing found or prefix is not absolute.
+    return "bin";
+}
+
+fn runUic(b: *std.Build, uic_path: []const u8, qt_lib_dir: ?[]const u8) std.Build.LazyPath {
     // Generate all ui_*.h into a shared output directory.
     // We use a WriteFiles step to collect outputs.
     const wf = b.addWriteFiles();
     for (ui_files) |ui| {
         const basename = std.fs.path.stem(ui);
         const cmd = b.addSystemCommand(&.{uic_path});
+        if (qt_lib_dir) |lib_dir| cmd.setEnvironmentVariable("DYLD_FRAMEWORK_PATH", lib_dir);
         cmd.addFileArg(b.path(ui));
         cmd.addArg("-o");
         const out = cmd.addOutputFileArg(b.fmt("ui_{s}.h", .{basename}));
@@ -284,10 +311,12 @@ fn runMoc(
     cpp_flags: []const []const u8,
     headers: []const []const u8,
     is_mac: bool,
+    qt_lib_dir: ?[]const u8,
 ) void {
     for (headers) |hdr| {
         const basename = std.fs.path.stem(hdr);
         const cmd = b.addSystemCommand(&.{moc_path});
+        if (qt_lib_dir) |lib_dir| cmd.setEnvironmentVariable("DYLD_FRAMEWORK_PATH", lib_dir);
         // Pass Qt defines to MOC
         cmd.addArgs(&.{
             "-DQT_DEPRECATED_WARNINGS",
@@ -320,10 +349,12 @@ fn runRcc(
     rcc_path: []const u8,
     cpp_flags: []const []const u8,
     files: []const []const u8,
+    qt_lib_dir: ?[]const u8,
 ) void {
     for (files) |qrc| {
         const basename = std.fs.path.stem(qrc);
         const cmd = b.addSystemCommand(&.{rcc_path});
+        if (qt_lib_dir) |lib_dir| cmd.setEnvironmentVariable("DYLD_FRAMEWORK_PATH", lib_dir);
         cmd.addArg("--name");
         cmd.addArg(basename);
         cmd.addFileArg(b.path(qrc));
