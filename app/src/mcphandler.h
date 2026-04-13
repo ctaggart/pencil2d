@@ -44,6 +44,9 @@ private:
     QString toolStop();
     QString toolUndo();
     QString toolRedo();
+    QString toolDrawRect(const QString& paramsJson);
+    QString toolDrawCircle(const QString& paramsJson);
+    QString toolClearFrame(const QString& paramsJson);
 
     Editor* mEditor;
     MainWindow2* mMainWindow;

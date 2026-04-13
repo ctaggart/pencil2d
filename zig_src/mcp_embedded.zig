@@ -225,7 +225,7 @@ fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.
     var args_owned = false;
     if (args_val) |av| {
         // Re-serialize the Value to JSON using allocPrint with json.fmt
-        const formatted = std.fmt.allocPrint(allocator, "{any}", .{std.json.fmt(av, .{})}) catch "{}";
+        const formatted = std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(av, .{})}) catch "{}";
         args_json = formatted;
         args_owned = true;
     }

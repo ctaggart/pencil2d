@@ -9,6 +9,7 @@
 #include "layervector.h"
 #include "layercamera.h"
 #include "layersound.h"
+#include "bitmapimage.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -55,6 +56,8 @@ size_t McpHandler::onToolCall(void* userdata, const char* method,
     QString qParams = QString::fromUtf8(params_json);
     QString result;
 
+    qDebug() << "MCP tool:" << qMethod << "params:" << qParams;
+
     // Serialize all MCP requests through mutex
     QMutexLocker lock(&self->mMutex);
 
@@ -97,7 +100,10 @@ QString McpHandler::handleToolsList()
         "{\"name\":\"play\",\"description\":\"Start playback\"},"
         "{\"name\":\"stop\",\"description\":\"Stop playback\"},"
         "{\"name\":\"undo\",\"description\":\"Undo last action\"},"
-        "{\"name\":\"redo\",\"description\":\"Redo last undone action\"}"
+        "{\"name\":\"redo\",\"description\":\"Redo last undone action\"},"
+        "{\"name\":\"draw_rect\",\"description\":\"Draw filled rectangle on current bitmap frame\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"layer\":{\"type\":\"string\"},\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"w\":{\"type\":\"integer\"},\"h\":{\"type\":\"integer\"},\"r\":{\"type\":\"integer\"},\"g\":{\"type\":\"integer\"},\"b\":{\"type\":\"integer\"},\"a\":{\"type\":\"integer\"}},\"required\":[\"layer\",\"x\",\"y\",\"w\",\"h\"]}},"
+        "{\"name\":\"draw_circle\",\"description\":\"Draw filled circle on current bitmap frame\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"layer\":{\"type\":\"string\"},\"cx\":{\"type\":\"integer\"},\"cy\":{\"type\":\"integer\"},\"radius\":{\"type\":\"integer\"},\"r\":{\"type\":\"integer\"},\"g\":{\"type\":\"integer\"},\"b\":{\"type\":\"integer\"},\"a\":{\"type\":\"integer\"}},\"required\":[\"layer\",\"cx\",\"cy\",\"radius\"]}},"
+        "{\"name\":\"clear_frame\",\"description\":\"Clear the current bitmap frame\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"layer\":{\"type\":\"string\"}},\"required\":[\"layer\"]}}"
         "]}"
     );
 }
@@ -135,6 +141,9 @@ QString McpHandler::handleTool(const QString& name, const QString& paramsJson)
     if (name == "stop") return toolStop();
     if (name == "undo") return toolUndo();
     if (name == "redo") return toolRedo();
+    if (name == "draw_rect") return toolDrawRect(paramsJson);
+    if (name == "draw_circle") return toolDrawCircle(paramsJson);
+    if (name == "clear_frame") return toolClearFrame(paramsJson);
     return QStringLiteral(R"({"error":"unknown tool"})");
 }
 
@@ -263,4 +272,86 @@ QString McpHandler::toolUndo()
 QString McpHandler::toolRedo()
 {
     return R"({"error":"redo not yet available via MCP"})";
+}
+
+static BitmapImage* getBitmapAtCurrentFrame(Editor* editor, int layerIdx)
+{
+    Layer* layer = editor->object()->getLayer(layerIdx);
+    if (!layer || layer->type() != Layer::BITMAP) return nullptr;
+    auto* bitmapLayer = static_cast<LayerBitmap*>(layer);
+    int frame = editor->currentFrame();
+    return bitmapLayer->getBitmapImageAtFrame(frame);
+}
+
+QString McpHandler::toolDrawRect(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int layerIdx = findLayerIndex(mEditor, params);
+    if (layerIdx < 0) return R"({"error":"layer not found"})";
+
+    BitmapImage* img = getBitmapAtCurrentFrame(mEditor, layerIdx);
+    if (!img) return R"({"error":"no bitmap frame at current position"})";
+
+    int x = params["x"].toInt(0);
+    int y = params["y"].toInt(0);
+    int w = params["w"].toInt(50);
+    int h = params["h"].toInt(50);
+    int r = params["r"].toInt(0);
+    int g = params["g"].toInt(0);
+    int b = params["b"].toInt(0);
+    int a = params["a"].toInt(255);
+
+    QColor color(r, g, b, a);
+    QPen pen(Qt::NoPen);
+    QBrush brush(color);
+    img->drawRect(QRectF(x, y, w, h), pen, brush, QPainter::CompositionMode_SourceOver, false);
+
+    mEditor->setModified(layerIdx, mEditor->currentFrame());
+    mEditor->updateFrame();
+
+    return QString(R"({"drawn":"rect","frame":%1,"layer":%2})").arg(mEditor->currentFrame()).arg(layerIdx);
+}
+
+QString McpHandler::toolDrawCircle(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int layerIdx = findLayerIndex(mEditor, params);
+    if (layerIdx < 0) return R"({"error":"layer not found"})";
+
+    BitmapImage* img = getBitmapAtCurrentFrame(mEditor, layerIdx);
+    if (!img) return R"({"error":"no bitmap frame at current position"})";
+
+    int cx = params["cx"].toInt(0);
+    int cy = params["cy"].toInt(0);
+    int radius = params["radius"].toInt(25);
+    int r = params["r"].toInt(0);
+    int g = params["g"].toInt(0);
+    int b = params["b"].toInt(0);
+    int a = params["a"].toInt(255);
+
+    QColor color(r, g, b, a);
+    QPen pen(Qt::NoPen);
+    QBrush brush(color);
+    img->drawEllipse(QRectF(cx - radius, cy - radius, radius * 2, radius * 2), pen, brush, QPainter::CompositionMode_SourceOver, false);
+
+    mEditor->setModified(layerIdx, mEditor->currentFrame());
+    mEditor->updateFrame();
+
+    return QString(R"({"drawn":"circle","frame":%1,"layer":%2})").arg(mEditor->currentFrame()).arg(layerIdx);
+}
+
+QString McpHandler::toolClearFrame(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int layerIdx = findLayerIndex(mEditor, params);
+    if (layerIdx < 0) return R"({"error":"layer not found"})";
+
+    BitmapImage* img = getBitmapAtCurrentFrame(mEditor, layerIdx);
+    if (!img) return R"({"error":"no bitmap frame at current position"})";
+
+    img->clear();
+    mEditor->setModified(layerIdx, mEditor->currentFrame());
+    mEditor->updateFrame();
+
+    return QString(R"({"cleared":true,"frame":%1,"layer":%2})").arg(mEditor->currentFrame()).arg(layerIdx);
 }
