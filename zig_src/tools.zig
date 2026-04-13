@@ -239,6 +239,182 @@ pub const StrokeContext = struct {
     }
 };
 
+// ── Brush Dab Generator ─────────────────────────────────────────────
+// Generates dab positions along a stroke path with stepping.
+
+pub const DabPoint = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    opacity: f64,
+};
+
+/// Generate dab positions along a stroke from last_point to current_point.
+/// brush_step_ratio: fraction of width per step (0.5 = standard brush overlap).
+pub fn generateDabs(
+    last_point: Point,
+    current_point: Point,
+    width: f64,
+    opacity: f64,
+    pressure: f64,
+    pressure_enabled: bool,
+    buf: []DabPoint,
+) usize {
+    const eff_width = if (pressure_enabled) width * pressure else width;
+    const eff_opacity = if (pressure_enabled) pressure * 0.5 else opacity;
+    const brush_step = @max(1.0, 0.5 * eff_width);
+
+    const dx = current_point.x - last_point.x;
+    const dy = current_point.y - last_point.y;
+    const dist = @sqrt(dx * dx + dy * dy) * 4.0; // 4x amplification
+
+    if (dist < 0.001) return 0;
+    const steps: usize = @intFromFloat(@round(dist / brush_step));
+    const count = @min(steps, buf.len);
+
+    for (0..count) |i| {
+        const t = @as(f64, @floatFromInt(i + 1)) * brush_step / dist;
+        buf[i] = .{
+            .x = last_point.x + t * dx,
+            .y = last_point.y + t * dy,
+            .width = eff_width,
+            .opacity = eff_opacity,
+        };
+    }
+    return count;
+}
+
+// ── Selection Geometry ──────────────────────────────────────────────
+
+pub const SelectionOp = enum { create, move, resize_tl, resize_tr, resize_bl, resize_br };
+
+pub const SelectionRect = struct {
+    x: f64 = 0,
+    y: f64 = 0,
+    w: f64 = 0,
+    h: f64 = 0,
+
+    /// Adjust selection based on drag operation.
+    pub fn adjust(self: *SelectionRect, op: SelectionOp, press: Point, current: Point) void {
+        const ox = current.x - press.x;
+        const oy = current.y - press.y;
+
+        switch (op) {
+            .create => {
+                self.x = @min(press.x, current.x);
+                self.y = @min(press.y, current.y);
+                self.w = @abs(current.x - press.x);
+                self.h = @abs(current.y - press.y);
+            },
+            .move => {
+                self.x += ox;
+                self.y += oy;
+            },
+            .resize_tl => {
+                self.x += ox;
+                self.y += oy;
+                self.w -= ox;
+                self.h -= oy;
+            },
+            .resize_tr => {
+                self.y += oy;
+                self.w += ox;
+                self.h -= oy;
+            },
+            .resize_bl => {
+                self.x += ox;
+                self.w -= ox;
+                self.h += oy;
+            },
+            .resize_br => {
+                self.w += ox;
+                self.h += oy;
+            },
+        }
+    }
+
+    /// Normalize (fix negative width/height).
+    pub fn normalize(self: *SelectionRect) void {
+        if (self.w < 0) {
+            self.x += self.w;
+            self.w = -self.w;
+        }
+        if (self.h < 0) {
+            self.y += self.h;
+            self.h = -self.h;
+        }
+    }
+
+    /// Check if point is inside.
+    pub fn contains(self: SelectionRect, px: f64, py: f64) bool {
+        return px >= self.x and px <= self.x + self.w and
+            py >= self.y and py <= self.y + self.h;
+    }
+
+    /// Detect which handle a point is near (for resize).
+    pub fn hitTest(self: SelectionRect, px: f64, py: f64, margin: f64) SelectionOp {
+        const near_l = @abs(px - self.x) < margin;
+        const near_r = @abs(px - (self.x + self.w)) < margin;
+        const near_t = @abs(py - self.y) < margin;
+        const near_b = @abs(py - (self.y + self.h)) < margin;
+
+        if (near_l and near_t) return .resize_tl;
+        if (near_r and near_t) return .resize_tr;
+        if (near_l and near_b) return .resize_bl;
+        if (near_r and near_b) return .resize_br;
+        if (self.contains(px, py)) return .move;
+        return .create;
+    }
+};
+
+// ── Smudge Blend ────────────────────────────────────────────────────
+
+/// Blend (smudge) pixels from src to dst in a circular area.
+/// strength: 0.0 = no blend, 1.0 = full replace.
+pub fn smudgeBlend(
+    pixels: []u8,
+    width: u32,
+    height: u32,
+    from_x: i32,
+    from_y: i32,
+    to_x: i32,
+    to_y: i32,
+    radius: i32,
+    strength: f64,
+) void {
+    const r2 = @as(i64, radius) * radius;
+    var dy: i32 = -radius;
+    while (dy <= radius) : (dy += 1) {
+        var ddx: i32 = -radius;
+        while (ddx <= radius) : (ddx += 1) {
+            if (@as(i64, ddx) * ddx + @as(i64, dy) * dy > r2) continue;
+
+            const sx: i32 = from_x + ddx;
+            const sy: i32 = from_y + dy;
+            const tx: i32 = to_x + ddx;
+            const ty: i32 = to_y + dy;
+
+            if (sx < 0 or sy < 0 or tx < 0 or ty < 0) continue;
+            const usx: u32 = @intCast(sx);
+            const usy: u32 = @intCast(sy);
+            const utx: u32 = @intCast(tx);
+            const uty: u32 = @intCast(ty);
+            if (usx >= width or usy >= height or utx >= width or uty >= height) continue;
+
+            const si = (usy * width + usx) * 4;
+            const ti = (uty * width + utx) * 4;
+            const s = strength;
+            const inv = 1.0 - s;
+
+            inline for (0..4) |c| {
+                const src_val: f64 = @floatFromInt(pixels[si + c]);
+                const dst_val: f64 = @floatFromInt(pixels[ti + c]);
+                pixels[ti + c] = @intFromFloat(dst_val * inv + src_val * s);
+            }
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 test "StrokeInterpolator smoothing none" {
@@ -291,5 +467,75 @@ test "StrokeContext effective width" {
 test "StrokeContext effective opacity" {
     const ctx = StrokeContext{ .current_pressure = 0.5 };
     const op = ctx.effectiveOpacity(1.0, true);
-    try std.testing.expect(op > 0.5 and op < 1.0); // 0.5 * 0.5 + 0.5 = 0.75
+    try std.testing.expect(op > 0.5 and op < 1.0);
+}
+
+test "generateDabs produces steps" {
+    var buf: [256]DabPoint = undefined;
+    const count = generateDabs(
+        .{ .x = 0, .y = 0 },
+        .{ .x = 100, .y = 0 },
+        10.0,
+        1.0,
+        1.0,
+        false,
+        &buf,
+    );
+    try std.testing.expect(count > 5); // 100px distance with ~5px steps
+    try std.testing.expect(buf[0].x > 0);
+    try std.testing.expectEqual(@as(f64, 10.0), buf[0].width);
+}
+
+test "generateDabs pressure scales width" {
+    var buf: [256]DabPoint = undefined;
+    const count = generateDabs(
+        .{ .x = 0, .y = 0 },
+        .{ .x = 50, .y = 0 },
+        20.0,
+        1.0,
+        0.5,
+        true,
+        &buf,
+    );
+    try std.testing.expect(count > 0);
+    try std.testing.expectEqual(@as(f64, 10.0), buf[0].width); // 20 * 0.5
+}
+
+test "SelectionRect create and resize" {
+    var sel = SelectionRect{};
+    sel.adjust(.create, .{ .x = 10, .y = 20 }, .{ .x = 110, .y = 80 });
+    try std.testing.expectEqual(@as(f64, 10), sel.x);
+    try std.testing.expectEqual(@as(f64, 100), sel.w);
+    try std.testing.expect(sel.contains(50, 50));
+    try std.testing.expect(!sel.contains(0, 0));
+
+    // Hit test corners
+    try std.testing.expectEqual(SelectionOp.resize_tl, sel.hitTest(10, 20, 5));
+    try std.testing.expectEqual(SelectionOp.resize_br, sel.hitTest(110, 80, 5));
+    try std.testing.expectEqual(SelectionOp.move, sel.hitTest(50, 50, 5));
+}
+
+test "SelectionRect normalize" {
+    var sel = SelectionRect{ .x = 100, .y = 100, .w = -50, .h = -30 };
+    sel.normalize();
+    try std.testing.expectEqual(@as(f64, 50), sel.x);
+    try std.testing.expectEqual(@as(f64, 70), sel.y);
+    try std.testing.expectEqual(@as(f64, 50), sel.w);
+    try std.testing.expectEqual(@as(f64, 30), sel.h);
+}
+
+test "smudgeBlend" {
+    // 4x4 image: left half red, right half blue
+    var pixels = [_]u8{
+        255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+        255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+        255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+        255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+    };
+    // Smudge from red (1,1) to blue (2,1) with 50% strength
+    smudgeBlend(&pixels, 4, 4, 1, 1, 2, 1, 1, 0.5);
+    // Pixel at (2,1) should be blended (not pure blue anymore)
+    const idx = (1 * 4 + 2) * 4;
+    try std.testing.expect(pixels[idx] > 0); // has some red
+    try std.testing.expect(pixels[idx + 2] > 0); // still has blue
 }
