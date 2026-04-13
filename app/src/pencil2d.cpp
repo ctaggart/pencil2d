@@ -32,6 +32,7 @@ GNU General Public License for more details.
 
 #include "commandlineexporter.h"
 #include "mainwindow2.h"
+#include "mcphandler.h"
 #include "pencildef.h"
 #include "platformhandler.h"
 
@@ -64,8 +65,8 @@ Pencil2D::Pencil2D(int& argc, char** argv) :
 
 Pencil2D::~Pencil2D()
 {
-    // with a std::unique_ptr member variable,
-    // you need a non-default destructor to avoid compilation error.
+    // Stop MCP server before destroying mainWindow/editor
+    if (mcpHandler) mcpHandler->stop();
 }
 
 Status Pencil2D::handleCommandLineOptions(const ZigParsedArgs* args)
@@ -86,6 +87,11 @@ Status Pencil2D::handleCommandLineOptions(const ZigParsedArgs* args)
     if (outputPaths.isEmpty())
     {
         prepareGuiStartup(inputPath);
+        // Start embedded MCP server if port was specified
+        if (args->mcp_port > 0) {
+            mcpHandler.reset(new McpHandler(mainWindow->mEditor, mainWindow.get()));
+            mcpHandler->start(args->mcp_port);
+        }
         return Status::OK;
     }
 

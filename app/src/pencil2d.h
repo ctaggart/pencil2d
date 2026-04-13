@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "pencilerror.h"
 
 class MainWindow2;
+class McpHandler;
 struct ZigParsedArgs;
 class QLockFile;
 
@@ -95,6 +96,7 @@ private:
     void prepareGuiStartup(const QString &inputPath);
 
     std::unique_ptr<MainWindow2> mainWindow;
+    std::unique_ptr<McpHandler> mcpHandler;
 
     std::unique_ptr<QLockFile> mProcessLock;
 };

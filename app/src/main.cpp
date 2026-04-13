@@ -86,8 +86,9 @@ int main(int argc, char* argv[])
             return EXIT_SUCCESS;
         case -1: // error
             return EXIT_FAILURE;
-        case 2: // mcp
-            return launchMcpServer(args->mcp_port, argv[0]);
+        case 2: // mcp — start GUI with embedded MCP server
+            args->mode = 0; // treat as GUI mode, port is already set
+            break;
         default:
             break;
     }
