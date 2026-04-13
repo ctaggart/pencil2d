@@ -4,14 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{
         // Force MSVC ABI on Windows so Zig uses MSVC system headers
         // instead of its bundled mingw headers.
-        .default_target = .{
-            .abi = if (@import("builtin").os.tag == .windows) .msvc else .none,
-        },
+        // Leave default ABI on macOS so the SDK is auto-detected.
+        .default_target = if (@import("builtin").os.tag == .windows) .{
+            .abi = .msvc,
+        } else .{},
     });
     const optimize = b.standardOptimizeOption(.{});
 
     const qt_prefix = b.option([]const u8, "qt-prefix", "Qt6 installation prefix") orelse
         "C:/Qt/6.8.2/msvc2022_64";
+
+    const is_mac = @import("builtin").os.tag == .macos;
+    const is_win = @import("builtin").os.tag == .windows;
 
     // ── zpix dependency (PNG/JPEG image support) ─────────────────────
     const zpix_dep = b.dependency("zpix", .{ .target = target, .optimize = optimize });
@@ -24,10 +28,11 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .link_libcpp = true,
         }),
     });
-    exe.subsystem = .Windows;
-    configurePencil2d(b, exe, qt_prefix, zpix_mod, false);
+    if (is_win) exe.subsystem = .Windows;
+    configurePencil2d(b, exe, qt_prefix, zpix_mod, false, is_mac, is_win);
     b.installArtifact(exe);
 
     // ── pencil2d_tests executable ────────────────────────────────────
@@ -37,10 +42,11 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .link_libcpp = true,
         }),
     });
-    tests_exe.subsystem = .Console;
-    configurePencil2d(b, tests_exe, qt_prefix, zpix_mod, true);
+    if (is_win) tests_exe.subsystem = .Console;
+    configurePencil2d(b, tests_exe, qt_prefix, zpix_mod, true, is_mac, is_win);
     b.installArtifact(tests_exe);
 
     // ── run steps ────────────────────────────────────────────────────
@@ -77,16 +83,26 @@ fn configurePencil2d(
     qt_prefix: []const u8,
     zpix_mod: *std.Build.Module,
     is_test: bool,
+    is_mac: bool,
+    is_win: bool,
 ) void {
     const mod = exe.root_module;
 
-    const cpp_flags: []const []const u8 = &.{
+    const cpp_flags: []const []const u8 = if (is_mac) &.{
+        "-std=c++17",
+        "-stdlib=libc++",
+        "-DAPP_VERSION=\"0.0.0.0\"",
+        "-DQT_DEPRECATED_WARNINGS",
+        "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
+        "-include",
+        "core_lib/src/corelib-pch.h",
+        "-include",
+        "app/src/app-pch.h",
+    } else &.{
         "-std=c++17",
         "-DAPP_VERSION=\"0.0.0.0\"",
         "-DQT_DEPRECATED_WARNINGS",
         "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
-        // Simulate PCH: force-include headers that the codebase expects
-        // to be implicitly available (CMake uses precompiled headers for these)
         "-include",
         "core_lib/src/corelib-pch.h",
         "-include",
@@ -122,33 +138,50 @@ fn configurePencil2d(
     for (project_include_dirs) |dir| {
         mod.addIncludePath(b.path(dir));
     }
-    // Windows platform header
-    mod.addIncludePath(b.path("core_lib/src/external/win32"));
-
-    // ── Qt include paths ─────────────────────────────────────────────
-    const qt_inc = b.fmt("{s}/include", .{qt_prefix});
-    mod.addSystemIncludePath(.{ .cwd_relative = qt_inc });
-    for (qt_modules) |qmod| {
-        mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/include/{s}", .{ qt_prefix, qmod }) });
+    // Platform header
+    if (is_win) {
+        mod.addIncludePath(b.path("core_lib/src/external/win32"));
+    } else if (is_mac) {
+        mod.addIncludePath(b.path("core_lib/src/external/macosx"));
     }
 
-    // ── Qt tool executables (platform-specific extension) ──────────
-    const exe_ext = if (@import("builtin").os.tag == .windows) ".exe" else "";
+    // ── Qt include paths ─────────────────────────────────────────────
+    if (is_mac) {
+        // macOS Homebrew Qt uses frameworks; add framework search path for linking
+        // and explicit include paths for C++ compilation
+        mod.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/lib", .{qt_prefix}) });
+        for (qt_modules) |qmod| {
+            mod.addSystemIncludePath(.{
+                .cwd_relative = b.fmt("{s}/lib/{s}.framework/Headers", .{ qt_prefix, qmod }),
+            });
+        }
+    } else {
+        const qt_inc = b.fmt("{s}/include", .{qt_prefix});
+        mod.addSystemIncludePath(.{ .cwd_relative = qt_inc });
+        for (qt_modules) |qmod| {
+            mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/include/{s}", .{ qt_prefix, qmod }) });
+        }
+    }
+
+    // ── Qt tool executables ──────────────────────────────────────────
+    // Homebrew Qt 6.11+ puts tools in share/qt/libexec/; older installs use bin/
+    const qt_tool_dir = if (is_mac) "share/qt/libexec" else "bin";
+    const exe_ext = if (is_win) ".exe" else "";
 
     // ── UIC: generate ui_*.h from .ui files ──────────────────────────
-    const uic_path = b.fmt("{s}/bin/uic{s}", .{ qt_prefix, exe_ext });
+    const uic_path = b.fmt("{s}/{s}/uic{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
     const uic_dir = runUic(b, uic_path);
     mod.addIncludePath(uic_dir);
 
     // ── MOC: generate moc_*.cpp from Q_OBJECT headers ────────────────
-    const moc_path = b.fmt("{s}/bin/moc{s}", .{ qt_prefix, exe_ext });
-    runMoc(b, mod, moc_path, qt_prefix, cpp_flags, core_moc_headers);
+    const moc_path = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
+    runMoc(b, mod, moc_path, qt_prefix, cpp_flags, core_moc_headers, is_mac);
     if (!is_test) {
-        runMoc(b, mod, moc_path, qt_prefix, cpp_flags, app_moc_headers);
+        runMoc(b, mod, moc_path, qt_prefix, cpp_flags, app_moc_headers, is_mac);
     }
 
     // ── RCC: generate qrc_*.cpp from .qrc files ─────────────────────
-    const rcc_path = b.fmt("{s}/bin/rcc{s}", .{ qt_prefix, exe_ext });
+    const rcc_path = b.fmt("{s}/{s}/rcc{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
     if (is_test) {
         runRcc(b, mod, rcc_path, cpp_flags, test_qrc_files);
     } else {
@@ -161,12 +194,26 @@ fn configurePencil2d(
         .files = core_lib_sources,
         .flags = cpp_flags,
     });
-    // Windows platform source
-    mod.addCSourceFiles(.{
-        .root = b.path("."),
-        .files = &.{"core_lib/src/external/win32/win32.cpp"},
-        .flags = cpp_flags,
-    });
+    // Platform source
+    if (is_win) {
+        mod.addCSourceFiles(.{
+            .root = b.path("."),
+            .files = &.{"core_lib/src/external/win32/win32.cpp"},
+            .flags = cpp_flags,
+        });
+    } else if (is_mac) {
+        mod.addCSourceFiles(.{
+            .root = b.path("."),
+            .files = &.{"core_lib/src/external/macosx/macosx.cpp"},
+            .flags = cpp_flags,
+        });
+        // Objective-C++ source
+        mod.addCSourceFiles(.{
+            .root = b.path("."),
+            .files = &.{"core_lib/src/external/macosx/macosxnative.mm"},
+            .flags = &.{ "-std=c++17", "-stdlib=libc++", "-fobjc-arc" },
+        });
+    }
 
     if (is_test) {
         mod.addIncludePath(b.path("tests/src"));
@@ -185,7 +232,7 @@ fn configurePencil2d(
     }
 
     // ── Link Qt6 libraries ───────────────────────────────────────────
-    if (@import("builtin").os.tag == .windows) {
+    if (is_win) {
         // Windows: link .lib import libraries directly
         for (qt_link_libs) |lib| {
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/{s}.lib", .{ qt_prefix, lib }) });
@@ -194,12 +241,13 @@ fn configurePencil2d(
         for (win_system_libs) |lib| {
             mod.linkSystemLibrary(lib, .{});
         }
-    } else if (@import("builtin").os.tag == .macos) {
+    } else if (is_mac) {
         // macOS: link Qt frameworks
-        mod.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{qt_prefix}) });
-        for (qt_link_libs) |lib| {
-            mod.linkSystemLibrary(lib, .{});
+        mod.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/lib", .{qt_prefix}) });
+        for (qt_framework_names) |fw| {
+            mod.linkFramework(fw, .{});
         }
+        // macOS system frameworks
         mod.linkFramework("Cocoa", .{});
         mod.linkFramework("IOKit", .{});
         mod.linkFramework("CoreGraphics", .{});
@@ -235,6 +283,7 @@ fn runMoc(
     qt_prefix: []const u8,
     cpp_flags: []const []const u8,
     headers: []const []const u8,
+    is_mac: bool,
 ) void {
     for (headers) |hdr| {
         const basename = std.fs.path.stem(hdr);
@@ -245,10 +294,15 @@ fn runMoc(
             "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
         });
         // Pass Qt include paths to MOC
-        cmd.addArgs(&.{ "-I", b.fmt("{s}/include", .{qt_prefix}) });
-        cmd.addArgs(&.{ "-I", b.fmt("{s}/include/QtCore", .{qt_prefix}) });
-        cmd.addArgs(&.{ "-I", b.fmt("{s}/include/QtWidgets", .{qt_prefix}) });
-        cmd.addArgs(&.{ "-I", b.fmt("{s}/include/QtGui", .{qt_prefix}) });
+        if (is_mac) {
+            // macOS: use framework search paths
+            cmd.addArgs(&.{ "-F", b.fmt("{s}/lib", .{qt_prefix}) });
+        } else {
+            cmd.addArgs(&.{ "-I", b.fmt("{s}/include", .{qt_prefix}) });
+            cmd.addArgs(&.{ "-I", b.fmt("{s}/include/QtCore", .{qt_prefix}) });
+            cmd.addArgs(&.{ "-I", b.fmt("{s}/include/QtWidgets", .{qt_prefix}) });
+            cmd.addArgs(&.{ "-I", b.fmt("{s}/include/QtGui", .{qt_prefix}) });
+        }
         // Pass project include paths to MOC
         for (project_include_dirs) |dir| {
             cmd.addArgs(&.{ "-I", b.pathJoin(&.{ b.build_root.path orelse ".", dir }) });
@@ -316,6 +370,17 @@ const qt_link_libs: []const []const u8 = &.{
     "Qt6Svg",
     "Qt6Network",
     "Qt6EntryPoint",
+};
+
+// macOS Qt framework names (without "6" prefix or EntryPoint)
+const qt_framework_names: []const []const u8 = &.{
+    "QtCore",
+    "QtWidgets",
+    "QtGui",
+    "QtXml",
+    "QtMultimedia",
+    "QtSvg",
+    "QtNetwork",
 };
 
 const win_system_libs: []const []const u8 = &.{
