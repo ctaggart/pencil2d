@@ -53,7 +53,6 @@ jobs:
           $dir = "pencil2d-$version-windows"
           New-Item -ItemType Directory -Path $dir
           Copy-Item zig-out/bin/pencil2d.exe $dir/
-          Copy-Item zig-out/bin/pencil2d_tests.exe $dir/ -ErrorAction SilentlyContinue
           & "$env:QT_ROOT_DIR/bin/windeployqt.exe" "$dir/pencil2d.exe"
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
 
