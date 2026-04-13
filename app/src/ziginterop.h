@@ -81,6 +81,13 @@ extern "C" {
     int qt_editor_flood_fill(void* editor, int layer, int x, int y,
                              int r, int g, int b, int a, int tolerance);
     int qt_editor_erase(void* editor, int layer, int cx, int cy, int radius);
+
+    // File operations
+    int qt_editor_save(void* editor, const char* path);
+    int qt_editor_open(void* editor, const char* path);
+
+    // Layer reorder
+    int qt_editor_swap_layers(void* editor, int i, int j);
 }
 
 #endif // ZIG_INTEROP_H

@@ -306,4 +306,32 @@ int qt_editor_erase(void* editor, int layer, int cx, int cy, int radius) {
     return 0;
 }
 
+int qt_editor_save(void* editor, const char* path) {
+    auto* e = static_cast<Editor*>(editor);
+    if (!e->object()) return -1;
+    e->object()->setFilePath(QString::fromUtf8(path));
+    e->prepareSave();
+    return 0;
+}
+
+int qt_editor_open(void* editor, const char* path) {
+    auto* e = static_cast<Editor*>(editor);
+    auto noop = [](int) {};
+    Status st = e->openObject(QString::fromUtf8(path), noop, noop);
+    if (st.ok()) {
+        e->updateObject();
+        return e->object() ? e->object()->getLayerCount() : 0;
+    }
+    return -1;
+}
+
+int qt_editor_swap_layers(void* editor, int i, int j) {
+    auto* e = static_cast<Editor*>(editor);
+    if (!e->object()) return -1;
+    if (!e->canSwapLayers(i, j)) return -1;
+    e->swapLayers(i, j);
+    emit e->updateTimeLine();
+    return 0;
+}
+
 } // extern "C"

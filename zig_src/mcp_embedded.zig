@@ -223,7 +223,10 @@ fn handleToolsList(allocator: Allocator, id: ?std.json.Value) ![]u8 {
         \\{"name":"draw_line","description":"Draw line","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x0":{"type":"integer"},"y0":{"type":"integer"},"x1":{"type":"integer"},"y1":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"},"width":{"type":"integer"}},"required":["layer","x0","y0","x1","y1"]}},
         \\{"name":"clear_frame","description":"Clear frame","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"}},"required":["layer"]}},
         \\{"name":"flood_fill","description":"Flood fill at point","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"},"tolerance":{"type":"integer"}},"required":["layer","x","y"]}},
-        \\{"name":"erase","description":"Erase circular area","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"radius":{"type":"integer"}},"required":["layer","cx","cy","radius"]}}
+        \\{"name":"erase","description":"Erase circular area","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"radius":{"type":"integer"}},"required":["layer","cx","cy","radius"]}},
+        \\{"name":"save_project","description":"Save project to .pclx file","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
+        \\{"name":"open_project","description":"Open a .pclx file","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
+        \\{"name":"layer_reorder","description":"Swap two layers","inputSchema":{"type":"object","properties":{"i":{"type":"integer"},"j":{"type":"integer"}},"required":["i","j"]}}
         \\]}
     );
 }
@@ -264,6 +267,9 @@ extern fn qt_editor_draw_line(editor: ?*anyopaque, layer: c_int, x0: c_int, y0: 
 extern fn qt_editor_clear_frame(editor: ?*anyopaque, layer: c_int) c_int;
 extern fn qt_editor_flood_fill(editor: ?*anyopaque, layer: c_int, x: c_int, y: c_int, r: c_int, g: c_int, b: c_int, a: c_int, tolerance: c_int) c_int;
 extern fn qt_editor_erase(editor: ?*anyopaque, layer: c_int, cx: c_int, cy: c_int, radius: c_int) c_int;
+extern fn qt_editor_save(editor: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn qt_editor_open(editor: ?*anyopaque, path: [*:0]const u8) c_int;
+extern fn qt_editor_swap_layers(editor: ?*anyopaque, i: c_int, j: c_int) c_int;
 
 fn getInt(args: ?std.json.Value, key: []const u8, default: i32) i32 {
     const obj = if (args) |a| (if (a == .object) &a.object else null) else null;
@@ -275,6 +281,13 @@ fn getInt(args: ?std.json.Value, key: []const u8, default: i32) i32 {
         .string => |s| std.fmt.parseInt(i32, s, 10) catch default,
         else => default,
     };
+}
+
+fn getStr(args: ?std.json.Value, key: []const u8) ?[]const u8 {
+    const obj = if (args) |a| (if (a == .object) &a.object else null) else null;
+    const o = obj orelse return null;
+    const v = o.get(key) orelse return null;
+    return if (v == .string) v.string else null;
 }
 
 fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.Value) !?[]u8 {
@@ -336,6 +349,21 @@ fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.
     } else if (std.mem.eql(u8, name, "erase")) blk: {
         _ = qt_editor_erase(editor, getInt(args, "layer", 0), getInt(args, "cx", 0), getInt(args, "cy", 0), getInt(args, "radius", 10));
         break :blk try std.fmt.allocPrint(allocator, "{{\"erased\":true}}", .{});
+    } else if (std.mem.eql(u8, name, "save_project")) blk: {
+        const path_str = getStr(args, "path") orelse break :blk try std.fmt.allocPrint(allocator, "{{\"error\":\"missing path\"}}", .{});
+        const path_z = try allocator.dupeZ(u8, path_str);
+        defer allocator.free(path_z);
+        const r = qt_editor_save(editor, path_z);
+        break :blk try std.fmt.allocPrint(allocator, "{{\"saved\":{s}}}", .{if (r == 0) "true" else "false"});
+    } else if (std.mem.eql(u8, name, "open_project")) blk: {
+        const path_str = getStr(args, "path") orelse break :blk try std.fmt.allocPrint(allocator, "{{\"error\":\"missing path\"}}", .{});
+        const path_z = try allocator.dupeZ(u8, path_str);
+        defer allocator.free(path_z);
+        const r = qt_editor_open(editor, path_z);
+        break :blk try std.fmt.allocPrint(allocator, "{{\"opened\":{s},\"layers\":{d}}}", .{ if (r >= 0) "true" else "false", r });
+    } else if (std.mem.eql(u8, name, "layer_reorder")) blk: {
+        const r = qt_editor_swap_layers(editor, getInt(args, "i", 0), getInt(args, "j", 1));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"swapped\":{s}}}", .{if (r == 0) "true" else "false"});
     } else try std.fmt.allocPrint(allocator, "{{\"error\":\"unknown tool\"}}", .{});
 
     defer allocator.free(result);
