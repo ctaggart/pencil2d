@@ -3,6 +3,8 @@
 #include "layermanager.h"
 #include "playbackmanager.h"
 #include "undoredomanager.h"
+#include "colormanager.h"
+#include "toolmanager.h"
 #include "object.h"
 #include "layer.h"
 #include "layerbitmap.h"
@@ -10,6 +12,7 @@
 #include "layercamera.h"
 #include "layersound.h"
 #include "bitmapimage.h"
+#include "pencildef.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -134,8 +137,12 @@ QString McpHandler::handleTool(const QString& name, const QString& paramsJson)
     if (name == "project_info") return toolProjectInfo();
     if (name == "layer_list") return toolLayerList();
     if (name == "layer_add") return toolLayerAdd(paramsJson);
+    if (name == "layer_remove") return toolLayerRemove(paramsJson);
+    if (name == "layer_rename") return toolLayerRename(paramsJson);
+    if (name == "layer_visibility") return toolLayerVisibility(paramsJson);
     if (name == "keyframe_list") return toolKeyframeList(paramsJson);
     if (name == "keyframe_add") return toolKeyframeAdd(paramsJson);
+    if (name == "keyframe_remove") return toolKeyframeRemove(paramsJson);
     if (name == "goto_frame") return toolGotoFrame(paramsJson);
     if (name == "play") return toolPlay();
     if (name == "stop") return toolStop();
@@ -143,7 +150,10 @@ QString McpHandler::handleTool(const QString& name, const QString& paramsJson)
     if (name == "redo") return toolRedo();
     if (name == "draw_rect") return toolDrawRect(paramsJson);
     if (name == "draw_circle") return toolDrawCircle(paramsJson);
+    if (name == "draw_line") return toolDrawLine(paramsJson);
     if (name == "clear_frame") return toolClearFrame(paramsJson);
+    if (name == "set_color") return toolSetColor(paramsJson);
+    if (name == "set_tool") return toolSetTool(paramsJson);
     return QStringLiteral(R"({"error":"unknown tool"})");
 }
 
@@ -354,4 +364,116 @@ QString McpHandler::toolClearFrame(const QString& paramsJson)
     mEditor->updateFrame();
 
     return QString(R"({"cleared":true,"frame":%1,"layer":%2})").arg(mEditor->currentFrame()).arg(layerIdx);
+}
+
+QString McpHandler::toolLayerRemove(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int idx = findLayerIndex(mEditor, params);
+    if (idx < 0) return R"({"error":"layer not found"})";
+    if (mEditor->object()->getLayerCount() <= 1) return R"({"error":"cannot delete last layer"})";
+
+    mEditor->object()->deleteLayer(idx);
+    emit mEditor->updateTimeLine();
+    emit mEditor->updateLayerCount();
+    return QString(R"({"removed":true,"remaining":%1})").arg(mEditor->object()->getLayerCount());
+}
+
+QString McpHandler::toolLayerRename(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int idx = findLayerIndex(mEditor, params);
+    if (idx < 0) return R"({"error":"layer not found"})";
+    QString newName = params["name"].toString("Layer");
+
+    Layer* layer = mEditor->object()->getLayer(idx);
+    layer->setName(newName);
+    emit mEditor->updateTimeLine();
+    return QString(R"({"renamed":true,"name":"%1"})").arg(newName);
+}
+
+QString McpHandler::toolLayerVisibility(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int idx = findLayerIndex(mEditor, params);
+    if (idx < 0) return R"({"error":"layer not found"})";
+
+    Layer* layer = mEditor->object()->getLayer(idx);
+    if (params.contains("visible")) {
+        layer->setVisible(params["visible"].toBool());
+    } else {
+        layer->switchVisibility();
+    }
+    mEditor->updateFrame();
+    return QString(R"({"visible":%1})").arg(layer->visible() ? "true" : "false");
+}
+
+QString McpHandler::toolKeyframeRemove(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int layerIdx = findLayerIndex(mEditor, params);
+    if (layerIdx < 0) return R"({"error":"layer not found"})";
+    int frame = params["frame"].toInt(mEditor->currentFrame());
+
+    Layer* layer = mEditor->object()->getLayer(layerIdx);
+    if (!layer->keyExists(frame)) return R"({"error":"no keyframe at that position"})";
+
+    layer->removeKeyFrame(frame);
+    emit mEditor->updateTimeLine();
+    mEditor->updateFrame();
+    return QString(R"({"removed":true,"frame":%1})").arg(frame);
+}
+
+QString McpHandler::toolDrawLine(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int layerIdx = findLayerIndex(mEditor, params);
+    if (layerIdx < 0) return R"({"error":"layer not found"})";
+
+    BitmapImage* img = getBitmapAtCurrentFrame(mEditor, layerIdx);
+    if (!img) return R"({"error":"no bitmap frame at current position"})";
+
+    int r = params["r"].toInt(0), g = params["g"].toInt(0), b = params["b"].toInt(0), a = params["a"].toInt(255);
+    qreal w = params["width"].toDouble(2.0);
+    QPointF p1(params["x0"].toDouble(), params["y0"].toDouble());
+    QPointF p2(params["x1"].toDouble(), params["y1"].toDouble());
+
+    QPen pen(QColor(r, g, b, a), w, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    img->drawLine(p1, p2, pen, QPainter::CompositionMode_SourceOver, false);
+
+    mEditor->setModified(layerIdx, mEditor->currentFrame());
+    mEditor->updateFrame();
+    return QString(R"({"drawn":"line","frame":%1})").arg(mEditor->currentFrame());
+}
+
+QString McpHandler::toolSetColor(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int r = params["r"].toInt(0), g = params["g"].toInt(0), b = params["b"].toInt(0), a = params["a"].toInt(255);
+    QColor c(r, g, b, a);
+    mEditor->color()->setFrontColor(c);
+    return QString(R"({"color":{"r":%1,"g":%2,"b":%3,"a":%4}})").arg(r).arg(g).arg(b).arg(a);
+}
+
+QString McpHandler::toolSetTool(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    QString toolName = params["tool"].toString("pencil");
+
+    ToolType type = PENCIL;
+    if (toolName == "pencil") type = PENCIL;
+    else if (toolName == "brush") type = BRUSH;
+    else if (toolName == "eraser") type = ERASER;
+    else if (toolName == "pen") type = PEN;
+    else if (toolName == "bucket") type = BUCKET;
+    else if (toolName == "eyedropper") type = EYEDROPPER;
+    else if (toolName == "select") type = SELECT;
+    else if (toolName == "move") type = MOVE;
+    else if (toolName == "hand") type = HAND;
+    else if (toolName == "polyline") type = POLYLINE;
+    else if (toolName == "smudge") type = SMUDGE;
+    else return R"({"error":"unknown tool type"})";
+
+    mEditor->tools()->setCurrentTool(type);
+    return QString(R"({"tool":"%1"})").arg(toolName);
 }

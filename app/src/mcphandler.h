@@ -46,7 +46,14 @@ private:
     QString toolRedo();
     QString toolDrawRect(const QString& paramsJson);
     QString toolDrawCircle(const QString& paramsJson);
+    QString toolDrawLine(const QString& paramsJson);
     QString toolClearFrame(const QString& paramsJson);
+    QString toolLayerRemove(const QString& paramsJson);
+    QString toolLayerRename(const QString& paramsJson);
+    QString toolLayerVisibility(const QString& paramsJson);
+    QString toolKeyframeRemove(const QString& paramsJson);
+    QString toolSetColor(const QString& paramsJson);
+    QString toolSetTool(const QString& paramsJson);
 
     Editor* mEditor;
     MainWindow2* mMainWindow;
