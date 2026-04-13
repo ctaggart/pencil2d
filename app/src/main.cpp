@@ -21,24 +21,7 @@ GNU General Public License for more details.
 #include "pencil2d.h"
 #include "pencilerror.h"
 #include "platformhandler.h"
-
-// Zig CLI parser (C ABI)
-extern "C" {
-    struct ZigParsedArgs {
-        int mode;           // 0=gui, 1=export, 2=mcp, 3=help, 4=version, -1=err
-        const char* input_path;
-        const char** export_paths;
-        int export_path_count;
-        const char* camera;
-        int width;
-        int height;
-        int start_frame;
-        int end_frame;
-        int transparency;
-        int mcp_port;
-    };
-    ZigParsedArgs* zig_parse_args(int argc, const char** argv);
-}
+#include "ziginterop.h"
 
 #ifdef _WIN32
 #include <process.h>

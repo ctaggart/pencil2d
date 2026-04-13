@@ -3,22 +3,10 @@
 
 #include <QObject>
 #include <QMutex>
+#include "ziginterop.h"
 
 class Editor;
 class MainWindow2;
-
-// Zig C ABI
-extern "C" {
-    typedef size_t (*McpCallback)(
-        void* userdata,
-        const char* method,
-        const char* params_json,
-        char* response_buf,
-        size_t response_buf_len
-    );
-    int zig_mcp_start(uint16_t port, McpCallback callback, void* userdata);
-    void zig_mcp_stop();
-}
 
 /// Bridges MCP tool calls from Zig TCP thread to the Qt main thread.
 /// All Editor mutations are dispatched via BlockingQueuedConnection.

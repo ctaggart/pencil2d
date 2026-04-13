@@ -1,7 +1,13 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{
+        // Force MSVC ABI on Windows so Zig uses MSVC system headers
+        // instead of its bundled mingw headers.
+        .default_target = .{
+            .abi = if (@import("builtin").os.tag == .windows) .msvc else .none,
+        },
+    });
     const optimize = b.standardOptimizeOption(.{});
 
     const qt_prefix = b.option([]const u8, "qt-prefix", "Qt6 installation prefix") orelse
@@ -16,6 +22,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    exe.subsystem = .Windows;
     configurePencil2d(b, exe, qt_prefix, false);
     b.installArtifact(exe);
 
@@ -28,6 +35,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    tests_exe.subsystem = .Console;
     configurePencil2d(b, tests_exe, qt_prefix, true);
     b.installArtifact(tests_exe);
 
@@ -429,6 +437,7 @@ const app_sources: []const []const u8 = &.{
     "app/src/layeropacitydialog.cpp",
     "app/src/main.cpp",
     "app/src/mainwindow2.cpp",
+    "app/src/mcphandler.cpp",
     "app/src/onionskinwidget.cpp",
     "app/src/pegbaralignmentdialog.cpp",
     "app/src/pencil2d.cpp",
@@ -546,6 +555,7 @@ const app_moc_headers: []const []const u8 = &.{
     "app/src/importpositiondialog.h",
     "app/src/layeropacitydialog.h",
     "app/src/mainwindow2.h",
+    "app/src/mcphandler.h",
     "app/src/onionskinwidget.h",
     "app/src/pegbaralignmentdialog.h",
     "app/src/pencil2d.h",

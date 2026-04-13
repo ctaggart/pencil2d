@@ -86,19 +86,19 @@ QString McpHandler::handleToolOnMainThread(const QString& method, const QString&
 
 QString McpHandler::handleToolsList()
 {
-    return QStringLiteral(
-        R"({"tools":[)"
-        R"({"name":"project_info","description":"Get project info: layers, frames, FPS"},)"
-        R"({"name":"layer_list","description":"List all layers with type and keyframe count"},)"
-        R"({"name":"layer_add","description":"Add a layer","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"type":{"type":"string","enum":["bitmap","vector","camera","sound"]}},"required":["name","type"]}},)"
-        R"({"name":"keyframe_list","description":"List keyframes on a layer","inputSchema":{"type":"object","properties":{"layer":{"type":"string"}},"required":["layer"]}},)"
-        R"({"name":"keyframe_add","description":"Add keyframe at position","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"frame":{"type":"integer"}},"required":["layer","frame"]}},)"
-        R"({"name":"goto_frame","description":"Scrub to a frame (live canvas update)","inputSchema":{"type":"object","properties":{"frame":{"type":"integer"}},"required":["frame"]}},)"
-        R"({"name":"play","description":"Start playback"},)"
-        R"({"name":"stop","description":"Stop playback"},)"
-        R"({"name":"undo","description":"Undo last action"},)"
-        R"({"name":"redo","description":"Redo last undone action"})"
-        R"(]})"
+    return QString::fromUtf8(
+        "{\"tools\":["
+        "{\"name\":\"project_info\",\"description\":\"Get project info: layers, frames, FPS\"},"
+        "{\"name\":\"layer_list\",\"description\":\"List all layers with type and keyframe count\"},"
+        "{\"name\":\"layer_add\",\"description\":\"Add a layer\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"enum\":[\"bitmap\",\"vector\",\"camera\",\"sound\"]}},\"required\":[\"name\",\"type\"]}},"
+        "{\"name\":\"keyframe_list\",\"description\":\"List keyframes on a layer\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"layer\":{\"type\":\"string\"}},\"required\":[\"layer\"]}},"
+        "{\"name\":\"keyframe_add\",\"description\":\"Add keyframe at position\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"layer\":{\"type\":\"integer\"},\"frame\":{\"type\":\"integer\"}},\"required\":[\"layer\",\"frame\"]}},"
+        "{\"name\":\"goto_frame\",\"description\":\"Scrub to a frame (live canvas update)\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"frame\":{\"type\":\"integer\"}},\"required\":[\"frame\"]}},"
+        "{\"name\":\"play\",\"description\":\"Start playback\"},"
+        "{\"name\":\"stop\",\"description\":\"Stop playback\"},"
+        "{\"name\":\"undo\",\"description\":\"Undo last action\"},"
+        "{\"name\":\"redo\",\"description\":\"Redo last undone action\"}"
+        "]}"
     );
 }
 
@@ -256,14 +256,11 @@ QString McpHandler::toolStop()
 
 QString McpHandler::toolUndo()
 {
-    mEditor->undoRedo()->undo();
-    mEditor->updateFrame();
-    return R"({"undone":true})";
+    // TODO: UndoRedoManager's undo/redo are private; needs public API
+    return R"({"error":"undo not yet available via MCP"})";
 }
 
 QString McpHandler::toolRedo()
 {
-    mEditor->undoRedo()->redo();
-    mEditor->updateFrame();
-    return R"({"redone":true})";
+    return R"({"error":"redo not yet available via MCP"})";
 }
