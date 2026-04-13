@@ -1,7 +1,12 @@
 .{
     .name = .pencil,
     .version = "0.16.0-dev.2960+ce1f7136a",
-    .dependencies = .{},
+    .dependencies = .{
+        .zpix = .{
+            .url = "git+https://github.com/ctaggart/zpix#4abe8473c0b1c0c50fcff9b14d4c62a23705f45a",
+            .hash = "zpix-0.1.0-N4OAh4NXAgBq_O8yToed0Kab1Lo729oY5bsg-h6ZTpxk",
+        },
+    },
     .paths = .{""},
     .fingerprint = 0x8a615c8bbedb00d4,
 }

@@ -13,6 +13,10 @@ pub fn build(b: *std.Build) void {
     const qt_prefix = b.option([]const u8, "qt-prefix", "Qt6 installation prefix") orelse
         "C:/Qt/6.8.2/msvc2022_64";
 
+    // ── zpix dependency (PNG/JPEG image support) ─────────────────────
+    const zpix_dep = b.dependency("zpix", .{ .target = target, .optimize = optimize });
+    const zpix_mod = zpix_dep.module("zpix");
+
     // ── pencil2d executable ──────────────────────────────────────────
     const exe = b.addExecutable(.{
         .name = "pencil2d",
@@ -56,6 +60,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    zig_test_mod.addImport("zpix", zpix_mod);
     const zig_tests = b.addTest(.{ .root_module = zig_test_mod });
     const run_zig_tests = b.addRunArtifact(zig_tests);
     const zig_test_step = b.step("zig-test", "Run Zig unit tests");

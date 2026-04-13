@@ -16,6 +16,7 @@ pub const mcp_embedded = @import("mcp_embedded.zig");
 pub const managers = @import("managers.zig");
 pub const tools = @import("tools.zig");
 pub const editor = @import("editor.zig");
+pub const png = @import("png.zig");
 comptime {
     _ = &pclx_zip;
     _ = &cli;
@@ -30,6 +31,7 @@ comptime {
     _ = &managers;
     _ = &tools;
     _ = &editor;
+    _ = &png;
 }
 
 pub const pi: f64 = 3.14159265358979323846;
