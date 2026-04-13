@@ -189,7 +189,7 @@ fn handleMessage(allocator: Allocator, msg: []const u8) !?[]u8 {
     const method = method_str.?;
 
     if (std.mem.eql(u8, method, "initialize")) return try handleInitialize(allocator, id);
-    if (std.mem.eql(u8, method, "initialized")) return null;
+    if (std.mem.eql(u8, method, "notifications/initialized") or std.mem.eql(u8, method, "initialized")) return null;
     if (std.mem.eql(u8, method, "ping")) return try jsonResult(allocator, id, "{}");
     if (std.mem.eql(u8, method, "tools/list")) return try handleToolsList(allocator, id);
     if (std.mem.eql(u8, method, "tools/call")) return try handleToolsCall(allocator, id, params);
@@ -339,14 +339,14 @@ fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.
         _ = qt_editor_set_tool(editor, tool_id);
         break :blk try std.fmt.allocPrint(allocator, "{{\"tool\":\"{s}\"}}", .{tool_str});
     } else if (std.mem.eql(u8, name, "draw_rect")) blk: {
-        _ = qt_editor_draw_rect(editor, getInt(args, "layer", 0), getInt(args, "x", 0), getInt(args, "y", 0), getInt(args, "w", 50), getInt(args, "h", 50), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
-        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"rect\"}}", .{});
+        const r = qt_editor_draw_rect(editor, getInt(args, "layer", 0), getInt(args, "x", 0), getInt(args, "y", 0), getInt(args, "w", 50), getInt(args, "h", 50), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"rect\",\"ok\":{s}}}", .{if (r == 0) "true" else "false"});
     } else if (std.mem.eql(u8, name, "draw_circle")) blk: {
-        _ = qt_editor_draw_circle(editor, getInt(args, "layer", 0), getInt(args, "cx", 0), getInt(args, "cy", 0), getInt(args, "radius", 25), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
-        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"circle\"}}", .{});
+        const r = qt_editor_draw_circle(editor, getInt(args, "layer", 0), getInt(args, "cx", 0), getInt(args, "cy", 0), getInt(args, "radius", 25), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"circle\",\"ok\":{s}}}", .{if (r == 0) "true" else "false"});
     } else if (std.mem.eql(u8, name, "draw_line")) blk: {
-        _ = qt_editor_draw_line(editor, getInt(args, "layer", 0), getInt(args, "x0", 0), getInt(args, "y0", 0), getInt(args, "x1", 0), getInt(args, "y1", 0), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255), getInt(args, "width", 2));
-        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"line\"}}", .{});
+        const r = qt_editor_draw_line(editor, getInt(args, "layer", 0), getInt(args, "x0", 0), getInt(args, "y0", 0), getInt(args, "x1", 0), getInt(args, "y1", 0), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255), getInt(args, "width", 2));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"line\",\"ok\":{s}}}", .{if (r == 0) "true" else "false"});
     } else if (std.mem.eql(u8, name, "clear_frame")) blk: {
         _ = qt_editor_clear_frame(editor, getInt(args, "layer", 0));
         break :blk try std.fmt.allocPrint(allocator, "{{\"cleared\":true}}", .{});

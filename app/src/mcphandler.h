@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QMutex>
+#include <atomic>
 #include "ziginterop.h"
 
 class Editor;
@@ -10,6 +11,7 @@ class MainWindow2;
 
 /// Thin bridge: starts Zig MCP server, provides Qt bridge functions.
 /// All MCP tool dispatch logic lives in Zig (mcp_embedded.zig).
+/// Bridge functions dispatch to the Qt main thread via BlockingQueuedConnection.
 class McpHandler : public QObject
 {
     Q_OBJECT
@@ -19,6 +21,9 @@ public:
 
     bool start(int port);
     void stop();
+
+    Editor* editor() const { return mEditor; }
+    bool isShuttingDown() const { return mShuttingDown.load(std::memory_order_acquire); }
 
     static size_t onToolCall(void* userdata, const char* method,
                              const char* params_json, char* response_buf,
@@ -31,6 +36,7 @@ private:
     Editor* mEditor;
     MainWindow2* mMainWindow;
     QMutex mMutex;
+    std::atomic<bool> mShuttingDown{false};
     bool mRunning = false;
 };
 
