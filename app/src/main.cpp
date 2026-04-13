@@ -23,36 +23,6 @@ GNU General Public License for more details.
 #include "platformhandler.h"
 #include "ziginterop.h"
 
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
-
-static int launchMcpServer(int port, const char* argv0)
-{
-    // Derive pencil2d-mcp path from our own executable path
-    std::string self(argv0);
-    auto sep = self.find_last_of("/\\");
-    std::string dir = (sep != std::string::npos) ? self.substr(0, sep + 1) : "";
-#ifdef _WIN32
-    std::string mcp_exe = dir + "pencil2d-mcp.exe";
-#else
-    std::string mcp_exe = dir + "pencil2d-mcp";
-#endif
-
-    char portStr[16];
-    snprintf(portStr, sizeof(portStr), "%d", port);
-
-    // Replace this process with pencil2d-mcp
-#ifdef _WIN32
-    return (int)_execl(mcp_exe.c_str(), "pencil2d-mcp", "--port", portStr, nullptr);
-#else
-    execl(mcp_exe.c_str(), "pencil2d-mcp", "--port", portStr, nullptr);
-    return -1; // exec failed
-#endif
-}
-
 /**
  * This is the entrypoint of the program. It performs basic initialization, then
  * boots the actual application (@ref Pencil2D).

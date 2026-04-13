@@ -65,28 +65,6 @@ pub fn build(b: *std.Build) void {
     const run_zig_tests = b.addRunArtifact(zig_tests);
     const zig_test_step = b.step("zig-test", "Run Zig unit tests");
     zig_test_step.dependOn(&run_zig_tests.step);
-
-    // ── MCP server executable ────────────────────────────────────────
-    const mcp_mod = b.createModule(.{
-        .root_source_file = b.path("zig_src/mcp_server.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    mcp_mod.addImport("zpix", zpix_mod);
-
-    const mcp_exe = b.addExecutable(.{
-        .name = "pencil2d-mcp",
-        .root_module = mcp_mod,
-    });
-    b.installArtifact(mcp_exe);
-
-    const mcp_run_cmd = b.addRunArtifact(mcp_exe);
-    mcp_run_cmd.step.dependOn(&mcp_exe.step);
-    if (b.args) |args| {
-        mcp_run_cmd.addArgs(args);
-    }
-    const mcp_run_step = b.step("mcp", "Run MCP server (pass --port PORT for TCP)");
-    mcp_run_step.dependOn(&mcp_run_cmd.step);
 }
 
 // ─────────────────────────────────────────────────────────────────────

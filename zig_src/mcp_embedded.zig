@@ -137,7 +137,7 @@ fn handleClient(stream: net.Stream) void {
     std.debug.print("MCP client disconnected\n", .{});
 }
 
-// ── JSON-RPC framing (same as mcp_server.zig) ───────────────────────
+// ── JSON-RPC framing ─────────────────────────────────────────────────
 
 fn readFrame(allocator: Allocator, reader: *Io.Reader) ![]u8 {
     var content_length: ?usize = null;

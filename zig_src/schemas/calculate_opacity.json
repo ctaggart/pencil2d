@@ -1,1 +1,0 @@
-{"type":"object","properties":{"current_layer":{"type":"integer"},"target_layer":{"type":"integer"},"threshold":{"type":"number","description":"Opacity falloff (0-1)"}},"required":["current_layer","target_layer","threshold"]}

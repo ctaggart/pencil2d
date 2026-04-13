@@ -1,1 +1,0 @@
-{"type":"object","properties":{"operation":{"type":"string","enum":["add","subtract","dot","lerp","length","manhattan_length","normalize"]},"ax":{"type":"number"},"ay":{"type":"number"},"bx":{"type":"number"},"by":{"type":"number"},"t":{"type":"number","description":"Interpolation parameter for lerp"}},"required":["operation","ax","ay"]}

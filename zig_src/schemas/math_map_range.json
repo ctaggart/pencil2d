@@ -1,1 +1,0 @@
-{"type":"object","properties":{"x":{"type":"number"},"input_min":{"type":"number"},"input_max":{"type":"number"},"output_min":{"type":"number"},"output_max":{"type":"number"}},"required":["x","input_min","input_max","output_min","output_max"]}
