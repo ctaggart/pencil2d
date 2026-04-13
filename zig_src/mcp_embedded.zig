@@ -205,11 +205,72 @@ fn handleInitialize(allocator: Allocator, id: ?std.json.Value) ![]u8 {
 }
 
 fn handleToolsList(allocator: Allocator, id: ?std.json.Value) ![]u8 {
-    // Dispatch to C++ to get tool list
-    var response_buf: [65536]u8 = undefined;
-    const n = g_server.callback(g_server.userdata, "tools/list", "{}", &response_buf, response_buf.len);
-    if (n == 0) return try jsonError(allocator, id, -32603, "Internal error");
-    return try jsonResult(allocator, id, response_buf[0..n]);
+    return try jsonResult(allocator, id,
+        \\{"tools":[
+        \\{"name":"project_info","description":"Get project info: layers, frames, FPS"},
+        \\{"name":"layer_list","description":"List all layers with type and keyframe count"},
+        \\{"name":"layer_add","description":"Add a layer","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"type":{"type":"string","enum":["bitmap","vector","camera","sound"]}},"required":["name","type"]}},
+        \\{"name":"layer_remove","description":"Remove a layer","inputSchema":{"type":"object","properties":{"index":{"type":"integer"}},"required":["index"]}},
+        \\{"name":"keyframe_list","description":"List keyframes","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"}},"required":["layer"]}},
+        \\{"name":"keyframe_add","description":"Add keyframe","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"frame":{"type":"integer"}},"required":["layer","frame"]}},
+        \\{"name":"goto_frame","description":"Go to frame","inputSchema":{"type":"object","properties":{"frame":{"type":"integer"}},"required":["frame"]}},
+        \\{"name":"play","description":"Start playback"},
+        \\{"name":"stop","description":"Stop playback"},
+        \\{"name":"set_fps","description":"Set FPS","inputSchema":{"type":"object","properties":{"fps":{"type":"integer"}},"required":["fps"]}},
+        \\{"name":"set_color","description":"Set color","inputSchema":{"type":"object","properties":{"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["r","g","b"]}},
+        \\{"name":"draw_rect","description":"Draw rectangle","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"w":{"type":"integer"},"h":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","x","y","w","h"]}},
+        \\{"name":"draw_circle","description":"Draw circle","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"radius":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","cx","cy","radius"]}},
+        \\{"name":"draw_line","description":"Draw line","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x0":{"type":"integer"},"y0":{"type":"integer"},"x1":{"type":"integer"},"y1":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"},"width":{"type":"integer"}},"required":["layer","x0","y0","x1","y1"]}},
+        \\{"name":"clear_frame","description":"Clear frame","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"}},"required":["layer"]}}
+        \\]}
+    );
+}
+
+// ── C Bridge to Qt Editor ────────────────────────────────────────────
+
+const EditorLayerInfo = extern struct {
+    id: c_int,
+    index: c_int,
+    keyframe_count: c_int,
+    layer_type: c_int,
+    visible: c_int,
+    name: [256]u8,
+};
+
+const EditorKeyframeInfo = extern struct {
+    frame: c_int,
+    length: c_int,
+};
+
+extern fn qt_editor_layer_count(editor: ?*anyopaque) c_int;
+extern fn qt_editor_get_layer(editor: ?*anyopaque, index: c_int, out: *EditorLayerInfo) c_int;
+extern fn qt_editor_get_keyframes(editor: ?*anyopaque, layer: c_int, out: [*]EditorKeyframeInfo, max: c_int) c_int;
+extern fn qt_editor_current_frame(editor: ?*anyopaque) c_int;
+extern fn qt_editor_fps(editor: ?*anyopaque) c_int;
+extern fn qt_editor_scrub_to(editor: ?*anyopaque, frame: c_int) c_int;
+extern fn qt_editor_add_layer(editor: ?*anyopaque, name: [*:0]const u8, layer_type: c_int) c_int;
+extern fn qt_editor_remove_layer(editor: ?*anyopaque, index: c_int) c_int;
+extern fn qt_editor_add_keyframe(editor: ?*anyopaque, layer: c_int, frame: c_int) c_int;
+extern fn qt_editor_remove_keyframe(editor: ?*anyopaque, layer: c_int, frame: c_int) c_int;
+extern fn qt_editor_play(editor: ?*anyopaque) c_int;
+extern fn qt_editor_stop(editor: ?*anyopaque) c_int;
+extern fn qt_editor_set_fps(editor: ?*anyopaque, fps: c_int) c_int;
+extern fn qt_editor_set_color(editor: ?*anyopaque, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
+extern fn qt_editor_draw_rect(editor: ?*anyopaque, layer: c_int, x: c_int, y: c_int, w: c_int, h: c_int, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
+extern fn qt_editor_draw_circle(editor: ?*anyopaque, layer: c_int, cx: c_int, cy: c_int, radius: c_int, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
+extern fn qt_editor_draw_line(editor: ?*anyopaque, layer: c_int, x0: c_int, y0: c_int, x1: c_int, y1: c_int, r: c_int, g: c_int, b: c_int, a: c_int, w: c_int) c_int;
+extern fn qt_editor_clear_frame(editor: ?*anyopaque, layer: c_int) c_int;
+
+fn getInt(args: ?std.json.Value, key: []const u8, default: i32) i32 {
+    const obj = if (args) |a| (if (a == .object) &a.object else null) else null;
+    const o = obj orelse return default;
+    const v = o.get(key) orelse return default;
+    return switch (v) {
+        .integer => |i| @intCast(i),
+        .float => |f| @intFromFloat(f),
+        .string => |s| std.fmt.parseInt(i32, s, 10) catch default,
+        else => default,
+    };
 }
 
 fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.Value) !?[]u8 {
@@ -218,33 +279,112 @@ fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.
 
     const name_val = p.object.get("name") orelse return try jsonError(allocator, id, -32602, "Missing tool name");
     const name = if (name_val == .string) name_val.string else return try jsonError(allocator, id, -32602, "Invalid tool name");
+    const args = p.object.get("arguments");
+    const editor = g_server.userdata;
 
-    // Serialize arguments to JSON string for the C callback
-    const args_val = p.object.get("arguments");
-    var args_json: []const u8 = "{}";
-    var args_owned = false;
-    if (args_val) |av| {
-        // Re-serialize the Value to JSON using allocPrint with json.fmt
-        const formatted = std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(av, .{})}) catch "{}";
-        args_json = formatted;
-        args_owned = true;
+    // Dispatch tools — all logic in Zig, thin C calls to Qt
+    const result: []const u8 = if (std.mem.eql(u8, name, "project_info"))
+        try std.fmt.allocPrint(allocator, "{{\"layers\":{d},\"fps\":{d},\"current_frame\":{d}}}", .{
+            qt_editor_layer_count(editor), qt_editor_fps(editor), qt_editor_current_frame(editor),
+        })
+    else if (std.mem.eql(u8, name, "layer_list"))
+        try buildLayerList(allocator, editor)
+    else if (std.mem.eql(u8, name, "layer_add"))
+        try handleLayerAdd(allocator, args, editor)
+    else if (std.mem.eql(u8, name, "layer_remove")) blk: {
+        const r = qt_editor_remove_layer(editor, getInt(args, "index", 0));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"removed\":{s}}}", .{if (r == 0) "true" else "false"});
+    } else if (std.mem.eql(u8, name, "keyframe_list"))
+        try buildKeyframeList(allocator, args, editor)
+    else if (std.mem.eql(u8, name, "keyframe_add")) blk: {
+        const r = qt_editor_add_keyframe(editor, getInt(args, "layer", 0), getInt(args, "frame", 1));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"added\":{s},\"frame\":{d}}}", .{ if (r >= 0) "true" else "false", r });
+    } else if (std.mem.eql(u8, name, "goto_frame")) blk: {
+        const r = qt_editor_scrub_to(editor, getInt(args, "frame", 1));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"frame\":{d}}}", .{r});
+    } else if (std.mem.eql(u8, name, "play")) blk: {
+        _ = qt_editor_play(editor);
+        break :blk try std.fmt.allocPrint(allocator, "{{\"playing\":true}}", .{});
+    } else if (std.mem.eql(u8, name, "stop")) blk: {
+        const f = qt_editor_stop(editor);
+        break :blk try std.fmt.allocPrint(allocator, "{{\"playing\":false,\"frame\":{d}}}", .{f});
+    } else if (std.mem.eql(u8, name, "set_fps")) blk: {
+        const r = qt_editor_set_fps(editor, getInt(args, "fps", 24));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"fps\":{d}}}", .{r});
+    } else if (std.mem.eql(u8, name, "set_color")) blk: {
+        _ = qt_editor_set_color(editor, getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"color\":\"set\"}}", .{});
+    } else if (std.mem.eql(u8, name, "draw_rect")) blk: {
+        _ = qt_editor_draw_rect(editor, getInt(args, "layer", 0), getInt(args, "x", 0), getInt(args, "y", 0), getInt(args, "w", 50), getInt(args, "h", 50), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"rect\"}}", .{});
+    } else if (std.mem.eql(u8, name, "draw_circle")) blk: {
+        _ = qt_editor_draw_circle(editor, getInt(args, "layer", 0), getInt(args, "cx", 0), getInt(args, "cy", 0), getInt(args, "radius", 25), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"circle\"}}", .{});
+    } else if (std.mem.eql(u8, name, "draw_line")) blk: {
+        _ = qt_editor_draw_line(editor, getInt(args, "layer", 0), getInt(args, "x0", 0), getInt(args, "y0", 0), getInt(args, "x1", 0), getInt(args, "y1", 0), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255), getInt(args, "width", 2));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"line\"}}", .{});
+    } else if (std.mem.eql(u8, name, "clear_frame")) blk: {
+        _ = qt_editor_clear_frame(editor, getInt(args, "layer", 0));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"cleared\":true}}", .{});
+    } else try std.fmt.allocPrint(allocator, "{{\"error\":\"unknown tool\"}}", .{});
+
+    defer allocator.free(result);
+    return try toolResult(allocator, id, result);
+}
+
+fn buildLayerList(allocator: Allocator, editor: ?*anyopaque) ![]const u8 {
+    const count = qt_editor_layer_count(editor);
+    var out: Io.Writer.Allocating = .init(allocator);
+    try out.writer.writeByte('[');
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        var info: EditorLayerInfo = undefined;
+        if (qt_editor_get_layer(editor, i, &info) != 0) continue;
+        if (i > 0) try out.writer.writeByte(',');
+        const type_name = switch (info.layer_type) {
+            1 => "bitmap",
+            2 => "vector",
+            4 => "sound",
+            5 => "camera",
+            else => "unknown",
+        };
+        const name_len = std.mem.indexOfScalar(u8, &info.name, 0) orelse 255;
+        try out.writer.print("{{\"index\":{d},\"id\":{d},\"name\":\"", .{ info.index, info.id });
+        try out.writer.writeAll(info.name[0..name_len]);
+        try out.writer.print("\",\"type\":\"{s}\",\"visible\":{s},\"keyframes\":{d}}}", .{
+            type_name, if (info.visible != 0) "true" else "false", info.keyframe_count,
+        });
     }
-    defer if (args_owned) allocator.free(args_json);
+    try out.writer.writeByte(']');
+    return try out.toOwnedSlice();
+}
 
-    // Create null-terminated copies for C ABI
-    const name_z = try allocator.dupeZ(u8, name);
+fn handleLayerAdd(allocator: Allocator, args: ?std.json.Value, editor: ?*anyopaque) ![]const u8 {
+    const name_str = if (args) |a| (if (a == .object) (if (a.object.get("name")) |v| (if (v == .string) v.string else null) else null) else null) else null;
+    const type_str = if (args) |a| (if (a == .object) (if (a.object.get("type")) |v| (if (v == .string) v.string else null) else null) else null) else null;
+    const layer_type: c_int = if (type_str) |t| (if (std.mem.eql(u8, t, "bitmap")) @as(c_int, 1) else if (std.mem.eql(u8, t, "vector")) @as(c_int, 2) else if (std.mem.eql(u8, t, "camera")) @as(c_int, 5) else if (std.mem.eql(u8, t, "sound")) @as(c_int, 4) else 1) else 1;
+    const name_z = if (name_str) |n| try allocator.dupeZ(u8, n) else try allocator.dupeZ(u8, "New Layer");
     defer allocator.free(name_z);
-    const args_z = try allocator.dupeZ(u8, args_json);
-    defer allocator.free(args_z);
+    const r = qt_editor_add_layer(editor, name_z, layer_type);
+    return try std.fmt.allocPrint(allocator, "{{\"added\":{s},\"id\":{d}}}", .{ if (r >= 0) "true" else "false", r });
+}
 
-    // Call C++ handler
-    var response_buf: [65536]u8 = undefined;
-    const n = g_server.callback(g_server.userdata, name_z, args_z, &response_buf, response_buf.len);
-    if (n == 0) return try jsonError(allocator, id, -32603, "Tool execution failed");
+fn buildKeyframeList(allocator: Allocator, args: ?std.json.Value, editor: ?*anyopaque) ![]const u8 {
+    var kfs: [1024]EditorKeyframeInfo = undefined;
+    const count = qt_editor_get_keyframes(editor, getInt(args, "layer", 0), &kfs, 1024);
+    var out: Io.Writer.Allocating = .init(allocator);
+    try out.writer.writeByte('[');
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        if (i > 0) try out.writer.writeByte(',');
+        const idx: usize = @intCast(i);
+        try out.writer.print("{{\"frame\":{d},\"length\":{d}}}", .{ kfs[idx].frame, kfs[idx].length });
+    }
+    try out.writer.writeByte(']');
+    return try out.toOwnedSlice();
+}
 
-    const content = response_buf[0..n];
-
-    // Build tool result envelope
+fn toolResult(allocator: Allocator, id: ?std.json.Value, content: []const u8) ![]u8 {
     var out: Io.Writer.Allocating = .init(allocator);
     try out.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
     try writeId(&out.writer, id);

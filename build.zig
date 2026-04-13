@@ -124,6 +124,19 @@ fn configurePencil2d(
     });
     mod.addObject(zig_lib);
 
+    // ── Embedded MCP server (separate object — has extern C deps) ────
+    if (!is_test) {
+        const mcp_lib = b.addObject(.{
+            .name = "pencil2d_mcp_embedded",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("zig_src/mcp_embedded.zig"),
+                .target = mod.resolved_target,
+                .optimize = mod.optimize,
+            }),
+        });
+        mod.addObject(mcp_lib);
+    }
+
     // ── Source include paths ─────────────────────────────────────────
     for (project_include_dirs) |dir| {
         mod.addIncludePath(b.path(dir));
