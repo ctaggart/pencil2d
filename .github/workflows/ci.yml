@@ -49,3 +49,22 @@ jobs:
       - name: Build Pencil2D
         shell: pwsh
         run: zig build "-Dqt-prefix=$env:QT_ROOT_DIR"
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0-dev.3146+0606af509
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.2'
+          modules: 'qtmultimedia'
+
+      - name: Build Pencil2D
+        run: zig build -Dqt-prefix="$QT_ROOT_DIR"

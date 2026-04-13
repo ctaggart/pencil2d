@@ -132,20 +132,23 @@ fn configurePencil2d(
         mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/include/{s}", .{ qt_prefix, qmod }) });
     }
 
+    // ── Qt tool executables (platform-specific extension) ──────────
+    const exe_ext = if (@import("builtin").os.tag == .windows) ".exe" else "";
+
     // ── UIC: generate ui_*.h from .ui files ──────────────────────────
-    const uic_path = b.fmt("{s}/bin/uic.exe", .{qt_prefix});
+    const uic_path = b.fmt("{s}/bin/uic{s}", .{ qt_prefix, exe_ext });
     const uic_dir = runUic(b, uic_path);
     mod.addIncludePath(uic_dir);
 
     // ── MOC: generate moc_*.cpp from Q_OBJECT headers ────────────────
-    const moc_path = b.fmt("{s}/bin/moc.exe", .{qt_prefix});
+    const moc_path = b.fmt("{s}/bin/moc{s}", .{ qt_prefix, exe_ext });
     runMoc(b, mod, moc_path, qt_prefix, cpp_flags, core_moc_headers);
     if (!is_test) {
         runMoc(b, mod, moc_path, qt_prefix, cpp_flags, app_moc_headers);
     }
 
     // ── RCC: generate qrc_*.cpp from .qrc files ─────────────────────
-    const rcc_path = b.fmt("{s}/bin/rcc.exe", .{qt_prefix});
+    const rcc_path = b.fmt("{s}/bin/rcc{s}", .{ qt_prefix, exe_ext });
     if (is_test) {
         runRcc(b, mod, rcc_path, cpp_flags, test_qrc_files);
     } else {
@@ -182,15 +185,27 @@ fn configurePencil2d(
     }
 
     // ── Link Qt6 libraries ───────────────────────────────────────────
-    // Link .lib import libraries directly since linkSystemLibrary may not
-    // resolve the correct names on Windows MSVC
-    for (qt_link_libs) |lib| {
-        mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/{s}.lib", .{ qt_prefix, lib }) });
-    }
-
-    // ── Windows system libraries ─────────────────────────────────────
-    for (win_system_libs) |lib| {
-        mod.linkSystemLibrary(lib, .{});
+    if (@import("builtin").os.tag == .windows) {
+        // Windows: link .lib import libraries directly
+        for (qt_link_libs) |lib| {
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/{s}.lib", .{ qt_prefix, lib }) });
+        }
+        // Windows system libraries
+        for (win_system_libs) |lib| {
+            mod.linkSystemLibrary(lib, .{});
+        }
+    } else if (@import("builtin").os.tag == .macos) {
+        // macOS: link Qt frameworks
+        mod.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{qt_prefix}) });
+        for (qt_link_libs) |lib| {
+            mod.linkSystemLibrary(lib, .{});
+        }
+        mod.linkFramework("Cocoa", .{});
+        mod.linkFramework("IOKit", .{});
+        mod.linkFramework("CoreGraphics", .{});
+        mod.linkFramework("CoreText", .{});
+        mod.linkFramework("Metal", .{});
+        mod.linkFramework("AppKit", .{});
     }
 }
 
