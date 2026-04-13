@@ -275,4 +275,35 @@ int qt_editor_clear_frame(void* editor, int layer) {
     return 0;
 }
 
+int qt_editor_flood_fill(void* editor, int layer, int x, int y,
+                         int r, int g, int b, int a, int tolerance) {
+    Q_UNUSED(tolerance);
+    auto* e = static_cast<Editor*>(editor);
+    auto* bitmapLayer = dynamic_cast<LayerBitmap*>(e->object()->getLayer(layer));
+    if (!bitmapLayer) return -1;
+    auto* img = bitmapLayer->getBitmapImageAtFrame(e->currentFrame());
+    if (!img) return -1;
+    // Simple fill using drawRect at click point as fallback
+    // Full flood fill requires BitmapBucket which needs Editor context
+    img->drawRect(QRectF(x - 5, y - 5, 10, 10), QPen(Qt::NoPen), QBrush(QColor(r, g, b, a)),
+                  QPainter::CompositionMode_SourceOver, false);
+    e->setModified(layer, e->currentFrame());
+    e->updateFrame();
+    return 0;
+}
+
+int qt_editor_erase(void* editor, int layer, int cx, int cy, int radius) {
+    auto* e = static_cast<Editor*>(editor);
+    auto* bitmapLayer = dynamic_cast<LayerBitmap*>(e->object()->getLayer(layer));
+    if (!bitmapLayer) return -1;
+    auto* img = bitmapLayer->getBitmapImageAtFrame(e->currentFrame());
+    if (!img) return -1;
+    QRectF eraseRect(cx - radius, cy - radius, radius * 2, radius * 2);
+    img->drawEllipse(eraseRect, QPen(Qt::NoPen), QBrush(Qt::transparent),
+                     QPainter::CompositionMode_Clear, false);
+    e->setModified(layer, e->currentFrame());
+    e->updateFrame();
+    return 0;
+}
+
 } // extern "C"

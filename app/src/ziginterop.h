@@ -78,6 +78,9 @@ extern "C" {
     int qt_editor_draw_line(void* editor, int layer, int x0, int y0, int x1, int y1,
                             int r, int g, int b, int a, int width);
     int qt_editor_clear_frame(void* editor, int layer);
+    int qt_editor_flood_fill(void* editor, int layer, int x, int y,
+                             int r, int g, int b, int a, int tolerance);
+    int qt_editor_erase(void* editor, int layer, int cx, int cy, int radius);
 }
 
 #endif // ZIG_INTEROP_H

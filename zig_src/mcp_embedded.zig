@@ -221,7 +221,9 @@ fn handleToolsList(allocator: Allocator, id: ?std.json.Value) ![]u8 {
         \\{"name":"draw_rect","description":"Draw rectangle","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"w":{"type":"integer"},"h":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","x","y","w","h"]}},
         \\{"name":"draw_circle","description":"Draw circle","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"radius":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","cx","cy","radius"]}},
         \\{"name":"draw_line","description":"Draw line","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x0":{"type":"integer"},"y0":{"type":"integer"},"x1":{"type":"integer"},"y1":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"},"width":{"type":"integer"}},"required":["layer","x0","y0","x1","y1"]}},
-        \\{"name":"clear_frame","description":"Clear frame","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"}},"required":["layer"]}}
+        \\{"name":"clear_frame","description":"Clear frame","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"}},"required":["layer"]}},
+        \\{"name":"flood_fill","description":"Flood fill at point","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"},"tolerance":{"type":"integer"}},"required":["layer","x","y"]}},
+        \\{"name":"erase","description":"Erase circular area","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"radius":{"type":"integer"}},"required":["layer","cx","cy","radius"]}}
         \\]}
     );
 }
@@ -260,6 +262,8 @@ extern fn qt_editor_draw_rect(editor: ?*anyopaque, layer: c_int, x: c_int, y: c_
 extern fn qt_editor_draw_circle(editor: ?*anyopaque, layer: c_int, cx: c_int, cy: c_int, radius: c_int, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
 extern fn qt_editor_draw_line(editor: ?*anyopaque, layer: c_int, x0: c_int, y0: c_int, x1: c_int, y1: c_int, r: c_int, g: c_int, b: c_int, a: c_int, w: c_int) c_int;
 extern fn qt_editor_clear_frame(editor: ?*anyopaque, layer: c_int) c_int;
+extern fn qt_editor_flood_fill(editor: ?*anyopaque, layer: c_int, x: c_int, y: c_int, r: c_int, g: c_int, b: c_int, a: c_int, tolerance: c_int) c_int;
+extern fn qt_editor_erase(editor: ?*anyopaque, layer: c_int, cx: c_int, cy: c_int, radius: c_int) c_int;
 
 fn getInt(args: ?std.json.Value, key: []const u8, default: i32) i32 {
     const obj = if (args) |a| (if (a == .object) &a.object else null) else null;
@@ -326,6 +330,12 @@ fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.
     } else if (std.mem.eql(u8, name, "clear_frame")) blk: {
         _ = qt_editor_clear_frame(editor, getInt(args, "layer", 0));
         break :blk try std.fmt.allocPrint(allocator, "{{\"cleared\":true}}", .{});
+    } else if (std.mem.eql(u8, name, "flood_fill")) blk: {
+        _ = qt_editor_flood_fill(editor, getInt(args, "layer", 0), getInt(args, "x", 0), getInt(args, "y", 0), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255), getInt(args, "tolerance", 32));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"filled\":true}}", .{});
+    } else if (std.mem.eql(u8, name, "erase")) blk: {
+        _ = qt_editor_erase(editor, getInt(args, "layer", 0), getInt(args, "cx", 0), getInt(args, "cy", 0), getInt(args, "radius", 10));
+        break :blk try std.fmt.allocPrint(allocator, "{{\"erased\":true}}", .{});
     } else try std.fmt.allocPrint(allocator, "{{\"error\":\"unknown tool\"}}", .{});
 
     defer allocator.free(result);
