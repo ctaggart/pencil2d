@@ -218,6 +218,7 @@ fn handleToolsList(allocator: Allocator, id: ?std.json.Value) ![]u8 {
         \\{"name":"stop","description":"Stop playback"},
         \\{"name":"set_fps","description":"Set FPS","inputSchema":{"type":"object","properties":{"fps":{"type":"integer"}},"required":["fps"]}},
         \\{"name":"set_color","description":"Set color","inputSchema":{"type":"object","properties":{"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["r","g","b"]}},
+        \\{"name":"set_tool","description":"Switch tool","inputSchema":{"type":"object","properties":{"tool":{"type":"string","enum":["pencil","eraser","select","move","hand","smudge","pen","polyline","bucket","eyedropper","brush"]}},"required":["tool"]}},
         \\{"name":"draw_rect","description":"Draw rectangle","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x":{"type":"integer"},"y":{"type":"integer"},"w":{"type":"integer"},"h":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","x","y","w","h"]}},
         \\{"name":"draw_circle","description":"Draw circle","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"cx":{"type":"integer"},"cy":{"type":"integer"},"radius":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"}},"required":["layer","cx","cy","radius"]}},
         \\{"name":"draw_line","description":"Draw line","inputSchema":{"type":"object","properties":{"layer":{"type":"integer"},"x0":{"type":"integer"},"y0":{"type":"integer"},"x1":{"type":"integer"},"y1":{"type":"integer"},"r":{"type":"integer"},"g":{"type":"integer"},"b":{"type":"integer"},"a":{"type":"integer"},"width":{"type":"integer"}},"required":["layer","x0","y0","x1","y1"]}},
@@ -261,6 +262,7 @@ extern fn qt_editor_play(editor: ?*anyopaque) c_int;
 extern fn qt_editor_stop(editor: ?*anyopaque) c_int;
 extern fn qt_editor_set_fps(editor: ?*anyopaque, fps: c_int) c_int;
 extern fn qt_editor_set_color(editor: ?*anyopaque, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
+extern fn qt_editor_set_tool(editor: ?*anyopaque, tool_type: c_int) c_int;
 extern fn qt_editor_draw_rect(editor: ?*anyopaque, layer: c_int, x: c_int, y: c_int, w: c_int, h: c_int, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
 extern fn qt_editor_draw_circle(editor: ?*anyopaque, layer: c_int, cx: c_int, cy: c_int, radius: c_int, r: c_int, g: c_int, b: c_int, a: c_int) c_int;
 extern fn qt_editor_draw_line(editor: ?*anyopaque, layer: c_int, x0: c_int, y0: c_int, x1: c_int, y1: c_int, r: c_int, g: c_int, b: c_int, a: c_int, w: c_int) c_int;
@@ -331,6 +333,11 @@ fn handleToolsCall(allocator: Allocator, id: ?std.json.Value, params: ?std.json.
     } else if (std.mem.eql(u8, name, "set_color")) blk: {
         _ = qt_editor_set_color(editor, getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
         break :blk try std.fmt.allocPrint(allocator, "{{\"color\":\"set\"}}", .{});
+    } else if (std.mem.eql(u8, name, "set_tool")) blk: {
+        const tool_str = getStr(args, "tool") orelse "pencil";
+        const tool_id: c_int = if (std.mem.eql(u8, tool_str, "pencil")) 0 else if (std.mem.eql(u8, tool_str, "eraser")) 1 else if (std.mem.eql(u8, tool_str, "select")) 2 else if (std.mem.eql(u8, tool_str, "move")) 3 else if (std.mem.eql(u8, tool_str, "hand")) 4 else if (std.mem.eql(u8, tool_str, "smudge")) 5 else if (std.mem.eql(u8, tool_str, "pen")) 7 else if (std.mem.eql(u8, tool_str, "polyline")) 8 else if (std.mem.eql(u8, tool_str, "bucket")) 9 else if (std.mem.eql(u8, tool_str, "eyedropper")) 10 else if (std.mem.eql(u8, tool_str, "brush")) 11 else 0;
+        _ = qt_editor_set_tool(editor, tool_id);
+        break :blk try std.fmt.allocPrint(allocator, "{{\"tool\":\"{s}\"}}", .{tool_str});
     } else if (std.mem.eql(u8, name, "draw_rect")) blk: {
         _ = qt_editor_draw_rect(editor, getInt(args, "layer", 0), getInt(args, "x", 0), getInt(args, "y", 0), getInt(args, "w", 50), getInt(args, "h", 50), getInt(args, "r", 0), getInt(args, "g", 0), getInt(args, "b", 0), getInt(args, "a", 255));
         break :blk try std.fmt.allocPrint(allocator, "{{\"drawn\":\"rect\"}}", .{});
