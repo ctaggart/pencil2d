@@ -5,6 +5,7 @@ on:
     branches: [zig]
   pull_request:
     branches: [zig]
+  workflow_dispatch:
 
 permissions:
   contents: read
