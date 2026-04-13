@@ -54,6 +54,8 @@ private:
     QString toolKeyframeRemove(const QString& paramsJson);
     QString toolSetColor(const QString& paramsJson);
     QString toolSetTool(const QString& paramsJson);
+    QString toolExportFrame(const QString& paramsJson);
+    QString toolSetFps(const QString& paramsJson);
 
     Editor* mEditor;
     MainWindow2* mMainWindow;

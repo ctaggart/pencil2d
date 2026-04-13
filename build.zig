@@ -51,13 +51,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_cmd.step);
 
     // ── Zig unit tests ───────────────────────────────────────────────
-    const zig_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("zig_src/pencil2d.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const zig_test_mod = b.createModule(.{
+        .root_source_file = b.path("zig_src/pencil2d.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+    const zig_tests = b.addTest(.{ .root_module = zig_test_mod });
     const run_zig_tests = b.addRunArtifact(zig_tests);
     const zig_test_step = b.step("zig-test", "Run Zig unit tests");
     zig_test_step.dependOn(&run_zig_tests.step);

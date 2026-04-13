@@ -154,6 +154,8 @@ QString McpHandler::handleTool(const QString& name, const QString& paramsJson)
     if (name == "clear_frame") return toolClearFrame(paramsJson);
     if (name == "set_color") return toolSetColor(paramsJson);
     if (name == "set_tool") return toolSetTool(paramsJson);
+    if (name == "export_frame") return toolExportFrame(paramsJson);
+    if (name == "set_fps") return toolSetFps(paramsJson);
     return QStringLiteral(R"({"error":"unknown tool"})");
 }
 
@@ -476,4 +478,29 @@ QString McpHandler::toolSetTool(const QString& paramsJson)
 
     mEditor->tools()->setCurrentTool(type);
     return QString(R"({"tool":"%1"})").arg(toolName);
+}
+
+QString McpHandler::toolExportFrame(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    QString path = params["path"].toString();
+    if (path.isEmpty()) return R"({"error":"missing path"})";
+    int layerIdx = findLayerIndex(mEditor, params);
+    if (layerIdx < 0) layerIdx = mEditor->currentLayerIndex();
+
+    BitmapImage* img = getBitmapAtCurrentFrame(mEditor, layerIdx);
+    if (!img) return R"({"error":"no bitmap frame"})";
+
+    Status st = img->writeFile(path);
+    if (!st.ok()) return R"({"error":"write failed"})";
+
+    return QString(R"({"exported":true,"path":"%1","frame":%2})").arg(path).arg(mEditor->currentFrame());
+}
+
+QString McpHandler::toolSetFps(const QString& paramsJson)
+{
+    QJsonObject params = QJsonDocument::fromJson(paramsJson.toUtf8()).object();
+    int newFps = params["fps"].toInt(24);
+    mEditor->setFps(newFps);
+    return QString(R"({"fps":%1})").arg(mEditor->fps());
 }
