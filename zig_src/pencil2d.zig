@@ -16,6 +16,7 @@ pub const managers = @import("managers.zig");
 pub const tools = @import("tools.zig");
 pub const editor = @import("editor.zig");
 pub const png = @import("png.zig");
+pub const @"export" = @import("export.zig");
 comptime {
     _ = &pclx_zip;
     _ = &cli;
@@ -30,6 +31,7 @@ comptime {
     _ = &tools;
     _ = &editor;
     _ = &png;
+    _ = &@"export";
 }
 
 pub const pi: f64 = 3.14159265358979323846;
