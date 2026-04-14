@@ -35,6 +35,20 @@ pub fn build(b: *std.Build) void {
     configurePencil2d(b, exe, qt_prefix, zpix_mod, false, is_mac, is_win);
     b.installArtifact(exe);
 
+    // ── macOS .app bundle ────────────────────────────────────────────
+    if (is_mac) {
+        const app = "Pencil2D Animation.app/Contents";
+        const install = b.getInstallStep();
+        // Executable symlink
+        install.dependOn(&b.addInstallBinFile(exe.getEmittedBin(), app ++ "/MacOS/pencil2d").step);
+        // Info.plist
+        install.dependOn(&b.addInstallBinFile(b.path("app/data/Info-zig.plist"), app ++ "/Info.plist").step);
+        // Icons
+        install.dependOn(&b.addInstallBinFile(b.path("app/data/pencil2d.icns"), app ++ "/Resources/pencil2d.icns").step);
+        install.dependOn(&b.addInstallBinFile(b.path("app/data/icons/mac_pcl_icon.icns"), app ++ "/Resources/mac_pcl_icon.icns").step);
+        install.dependOn(&b.addInstallBinFile(b.path("app/data/icons/mac_pclx_icon.icns"), app ++ "/Resources/mac_pclx_icon.icns").step);
+    }
+
     // ── pencil2d_tests executable ────────────────────────────────────
     const tests_exe = b.addExecutable(.{
         .name = "pencil2d_tests",
@@ -91,7 +105,7 @@ fn configurePencil2d(
     const cpp_flags: []const []const u8 = if (is_mac) &.{
         "-std=c++17",
         "-stdlib=libc++",
-        "-DAPP_VERSION=\"0.0.0.0\"",
+        "-DAPP_VERSION=\"v0.8.0-dev.8\"",
         "-DQT_DEPRECATED_WARNINGS",
         "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
         "-include",
@@ -100,7 +114,7 @@ fn configurePencil2d(
         "app/src/app-pch.h",
     } else &.{
         "-std=c++17",
-        "-DAPP_VERSION=\"0.0.0.0\"",
+        "-DAPP_VERSION=\"v0.8.0-dev.8\"",
         "-DQT_DEPRECATED_WARNINGS",
         "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
         "-Wno-unused-command-line-argument", // -nostdinc++ passed by Zig even when link_libcpp is null (ctaggart/zig#242)

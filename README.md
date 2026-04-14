@@ -1,6 +1,4 @@
-[![CI](https://github.com/ctaggart/pencil/actions/workflows/ci.yml/badge.svg)](https://github.com/ctaggart/pencil/actions/workflows/ci.yml)
-
-# Pencil2D - Zig Fork
+# Pencil2D Animation
 
 This is a fork of [Pencil2D](https://www.pencil2d.org/) that ports the core engine from C++ to **Zig**, with an embedded **MCP (Model Context Protocol)** server for programmatic animation control.
 
@@ -26,9 +24,14 @@ Requires [Zig 0.16.0-dev](https://github.com/ctaggart/zig/releases) and Qt 6.8.
 # Run Zig tests (no Qt needed)
 zig build zig-test
 
+# Build full app (macOS, requires Qt)
+zig build -Dqt-prefix="/opt/homebrew/opt/qt@6"
+
 # Build full app (Windows, requires Qt + MSVC)
 zig build -Dqt-prefix="C:/Qt/6.8.2/msvc2022_64"
 ```
+
+On macOS, the build produces `zig-out/bin/Pencil2D Animation.app`.
 
 ## MCP Server
 
