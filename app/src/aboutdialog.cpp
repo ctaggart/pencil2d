@@ -44,11 +44,9 @@ void AboutDialog::init()
 
     QString version(APP_VERSION);
     if (version == "0.0.0.0") {
-        devText << "Development Build ";
-        devText << "Build date: " __DATE__;
+        devText << "Development Build";
     } else if (version.startsWith("99.0.0")) {
         devText << QString("Nightly Build (%1)").arg(APP_VERSION);
-        devText << "Build date: " __DATE__;
     } else {
         devText << tr("Version: %1", "Version Number in About Dialog").arg(APP_VERSION);
     }

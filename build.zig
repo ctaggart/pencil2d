@@ -103,6 +103,7 @@ fn configurePencil2d(
         "-DAPP_VERSION=\"0.0.0.0\"",
         "-DQT_DEPRECATED_WARNINGS",
         "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
+        "-Wno-unused-command-line-argument", // -nostdinc++ passed by Zig even when link_libcpp is null (ctaggart/zig#242)
         "-include",
         "core_lib/src/corelib-pch.h",
         "-include",

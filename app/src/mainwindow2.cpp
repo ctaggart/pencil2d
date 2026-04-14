@@ -87,7 +87,7 @@ GNU General Public License for more details.
 #ifdef GIT_TIMESTAMP
 #define BUILD_DATE S__GIT_TIMESTAMP
 #else
-#define BUILD_DATE __DATE__
+#define BUILD_DATE APP_VERSION
 #endif
 
 namespace {
@@ -813,8 +813,7 @@ bool MainWindow2::saveObject(QString strSavedFileName)
         errorLogFolder.mkpath("./logs");
         errorLogFolder.cd("logs");
 
-        QDateTime dt = QDateTime::currentDateTime();
-        dt.setTimeSpec(Qt::UTC);
+        QDateTime dt = QDateTime::currentDateTimeUtc();
         QFile eLog(errorLogFolder.absoluteFilePath(QString("error-%1.txt").arg(dt.toString(Qt::ISODate))));
         if (eLog.open(QIODevice::WriteOnly | QIODevice::Text))
         {
