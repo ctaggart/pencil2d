@@ -105,7 +105,7 @@ fn configurePencil2d(
     const cpp_flags: []const []const u8 = if (is_mac) &.{
         "-std=c++17",
         "-stdlib=libc++",
-        "-DAPP_VERSION=\"0.0.0.0\"",
+        "-DAPP_VERSION=\"v0.8.0-dev.8\"",
         "-DQT_DEPRECATED_WARNINGS",
         "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
         "-include",
@@ -114,7 +114,7 @@ fn configurePencil2d(
         "app/src/app-pch.h",
     } else &.{
         "-std=c++17",
-        "-DAPP_VERSION=\"0.0.0.0\"",
+        "-DAPP_VERSION=\"v0.8.0-dev.8\"",
         "-DQT_DEPRECATED_WARNINGS",
         "-DQT_DISABLE_DEPRECATED_UP_TO=0x050F00",
         "-Wno-unused-command-line-argument", // -nostdinc++ passed by Zig even when link_libcpp is null (ctaggart/zig#242)
