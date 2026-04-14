@@ -263,6 +263,8 @@ fn configurePencil2d(
         mod.linkFramework("CoreText", .{});
         mod.linkFramework("Metal", .{});
         mod.linkFramework("AppKit", .{});
+        // Set rpath so the packaged binary finds Qt frameworks next to itself
+        mod.addRPathSpecial("@executable_path/../Frameworks");
     }
 }
 

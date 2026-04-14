@@ -86,9 +86,28 @@ jobs:
         run: |
           version="${{ github.ref_name }}"
           dir="pencil2d-${version}-macos-arm64"
-          mkdir -p "$dir"
-          cp zig-out/bin/pencil2d "$dir/"
-          "$QT_ROOT_DIR/bin/macdeployqt" "$dir/pencil2d" || true
+
+          # Create a .app bundle so macdeployqt deploys Qt frameworks and plugins
+          app="$dir/Pencil2D.app"
+          mkdir -p "$app/Contents/MacOS"
+          cp zig-out/bin/pencil2d "$app/Contents/MacOS/"
+          cat > "$app/Contents/Info.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>pencil2d</string>
+            <key>CFBundleIdentifier</key><string>org.pencil2d.pencil2d</string>
+            <key>CFBundleName</key><string>Pencil2D</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+          </dict></plist>
+          EOF
+
+          "$QT_ROOT_DIR/bin/macdeployqt" "$app" -verbose=1
+
+          # Verify the binary has an rpath and frameworks are present
+          otool -l "$app/Contents/MacOS/pencil2d" | grep -A2 LC_RPATH
+          ls "$app/Contents/Frameworks/"
+
           tar czf "${dir}.tar.gz" "$dir"
 
       - name: Upload artifact
