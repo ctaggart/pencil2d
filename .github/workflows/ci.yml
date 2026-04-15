@@ -39,16 +39,15 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.2'
-          arch: 'win64_msvc2022_64'
-          modules: 'qtmultimedia'
+      - name: Download static Qt
+        shell: pwsh
+        run: |
+          curl -L https://github.com/ctaggart/qt5/releases/download/v6.8.3/qt-static-6.8.3-x86_64-windows-msvc.tar.xz -o qt-static.tar.xz
+          tar xf qt-static.tar.xz
 
       - name: Build Pencil2D
         shell: pwsh
-        run: zig build "-Dqt-prefix=$env:QT_ROOT_DIR"
+        run: zig build "-Dqt-prefix=qt-static-6.8.3-x86_64-windows-msvc" -Dqt-static=true
 
   build-macos:
     runs-on: macos-latest
@@ -60,11 +59,8 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.2'
-          modules: 'qtmultimedia'
+      - name: Download static Qt
+        run: curl -L https://github.com/ctaggart/qt5/releases/download/v6.8.3/qt-static-6.8.3-aarch64-macos.tar.xz | tar xJ
 
       - name: Build Pencil2D
-        run: zig build -Dqt-prefix="$QT_ROOT_DIR"
+        run: zig build -Dqt-prefix="qt-static-6.8.3-aarch64-macos" -Dqt-static=true
