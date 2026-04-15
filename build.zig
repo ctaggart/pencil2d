@@ -355,17 +355,19 @@ fn configurePencil2d(
 fn findQtToolDir(b: *std.Build, qt_prefix: []const u8, exe_ext: []const u8) []const u8 {
     const candidates = [_][]const u8{
         "share/qt/libexec", // Homebrew Qt 6.11+
-        "libexec",          // aqtinstall on macOS
+        "libexec",          // aqtinstall on macOS / static Qt
         "bin",              // system Qt / Windows / Linux
     };
-    if (std.fs.path.isAbsolute(qt_prefix)) {
-        for (candidates) |dir| {
-            const probe = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, dir, exe_ext });
+    for (candidates) |dir| {
+        const probe = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, dir, exe_ext });
+        if (std.fs.path.isAbsolute(probe)) {
             std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch continue;
-            return dir;
+        } else {
+            std.fs.cwd().access(probe, .{}) catch continue;
         }
+        return dir;
     }
-    // Fall back to "bin" if nothing found or prefix is not absolute.
+    // Fall back to "bin" if nothing found.
     return "bin";
 }
 

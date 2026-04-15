@@ -46,7 +46,7 @@ Connect via HTTP on `http://localhost:9876/mcp` using JSON-RPC 2.0 POST requests
 ### Gemini CLI
 
 ```bash
-gemini mcp add --name pencil2d -- ncat localhost 9876
+gemini mcp add --transport http --trust pencil2d http://127.0.0.1:9876/mcp
 ```
 
 ### Available Tools (21)
@@ -72,7 +72,7 @@ gemini mcp add --name pencil2d -- ncat localhost 9876
 |  - tools.zig (algorithms)         |
 |  - keyframe/layer/object.zig      |
 |  - pclx_file/xml/png.zig          |
-|  - mcp_embedded.zig (MCP TCP)     |
+|  - mcp_embedded.zig (MCP HTTP)     |
 |  - export/preferences/etc.        |
 +-----------------------------------+
 ```

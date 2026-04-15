@@ -309,8 +309,8 @@ fn buildLayerList(allocator: std.mem.Allocator, editor: ?*anyopaque) ![]const u8
         };
         const name_len = std.mem.indexOfScalar(u8, &info.name, 0) orelse 255;
         const entry = std.fmt.allocPrint(allocator, "{{\"index\":{d},\"id\":{d},\"name\":\"{s}\",\"type\":\"{s}\",\"visible\":{s},\"keyframes\":{d}}}", .{
-            info.index, info.id, info.name[0..name_len],
-            type_name, if (info.visible != 0) "true" else "false", info.keyframe_count,
+            info.index, info.id,                                    info.name[0..name_len],
+            type_name,  if (info.visible != 0) "true" else "false", info.keyframe_count,
         }) catch return error.OutOfMemory;
         defer allocator.free(entry);
         try buf.appendSlice(allocator, entry);
