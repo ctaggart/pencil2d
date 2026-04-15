@@ -19,7 +19,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0-dev.3146+0606af509
+          version: 0.16.0
 
       - name: Run Zig tests
         run: zig build zig-test
@@ -33,7 +33,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0-dev.3146+0606af509
+          version: 0.16.0
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -71,7 +71,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0-dev.3146+0606af509
+          version: 0.16.0
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -87,20 +87,8 @@ jobs:
           version="${{ github.ref_name }}"
           dir="pencil2d-${version}-macos-arm64"
 
-          # Create a .app bundle so macdeployqt deploys Qt frameworks and plugins
-          app="$dir/Pencil2D.app"
-          mkdir -p "$app/Contents/MacOS"
-          cp zig-out/bin/pencil2d "$app/Contents/MacOS/"
-          cat > "$app/Contents/Info.plist" << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleExecutable</key><string>pencil2d</string>
-            <key>CFBundleIdentifier</key><string>org.pencil2d.pencil2d</string>
-            <key>CFBundleName</key><string>Pencil2D</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-          </dict></plist>
-          EOF
+          # The build already creates "Pencil2D Animation.app" in zig-out/bin/
+          app="zig-out/bin/Pencil2D Animation.app"
 
           "$QT_ROOT_DIR/bin/macdeployqt" "$app" -verbose=1
 
@@ -108,6 +96,8 @@ jobs:
           otool -l "$app/Contents/MacOS/pencil2d" | grep -A2 LC_RPATH
           ls "$app/Contents/Frameworks/"
 
+          mkdir -p "$dir"
+          cp -R "$app" "$dir/"
           tar czf "${dir}.tar.gz" "$dir"
 
       - name: Upload artifact

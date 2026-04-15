@@ -1,10 +1,10 @@
 // McpHandler — thin C++ bridge between Zig MCP server and Qt Editor.
 // All MCP tool dispatch/JSON logic lives in Zig (mcp_embedded.zig).
 // This file provides:
-//   1. McpHandler QObject that starts/stops the Zig TCP server
+//   1. McpHandler QObject that starts/stops the Zig HTTP server
 //   2. extern "C" bridge functions that Zig calls, dispatched to the main thread
 //
-// Thread safety: all qt_editor_* functions are called from the Zig TCP thread.
+// Thread safety: all qt_editor_* functions are called from the Zig HTTP thread.
 // They use QMetaObject::invokeMethod with BlockingQueuedConnection to run
 // the actual Qt work on the main thread, preventing concurrent access to
 // BitmapImage, Editor, and other non-thread-safe Qt objects.

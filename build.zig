@@ -21,6 +21,8 @@ pub fn build(b: *std.Build) void {
     const zpix_dep = b.dependency("zpix", .{ .target = target, .optimize = optimize });
     const zpix_mod = zpix_dep.module("zpix");
 
+    // mcp dependency is loaded below inside the `if (!is_test)` block.
+
     // ── pencil2d executable ──────────────────────────────────────────
     const exe = b.addExecutable(.{
         .name = "pencil2d",
@@ -39,14 +41,22 @@ pub fn build(b: *std.Build) void {
     if (is_mac) {
         const app = "Pencil2D Animation.app/Contents";
         const install = b.getInstallStep();
-        // Executable symlink
-        install.dependOn(&b.addInstallBinFile(exe.getEmittedBin(), app ++ "/MacOS/pencil2d").step);
+        // Executable
+        const exe_install = b.addInstallBinFile(exe.getEmittedBin(), app ++ "/MacOS/pencil2d");
+        install.dependOn(&exe_install.step);
         // Info.plist
         install.dependOn(&b.addInstallBinFile(b.path("app/data/Info-zig.plist"), app ++ "/Info.plist").step);
         // Icons
         install.dependOn(&b.addInstallBinFile(b.path("app/data/pencil2d.icns"), app ++ "/Resources/pencil2d.icns").step);
         install.dependOn(&b.addInstallBinFile(b.path("app/data/icons/mac_pcl_icon.icns"), app ++ "/Resources/mac_pcl_icon.icns").step);
         install.dependOn(&b.addInstallBinFile(b.path("app/data/icons/mac_pclx_icon.icns"), app ++ "/Resources/mac_pclx_icon.icns").step);
+        // Ad-hoc code sign so macOS recognises the bundle icon
+        const codesign = b.addSystemCommand(&.{
+            "codesign", "--force", "--deep", "--sign", "-",
+            b.fmt("{s}/bin/Pencil2D Animation.app", .{b.install_path}),
+        });
+        codesign.step.dependOn(&exe_install.step);
+        install.dependOn(&codesign.step);
     }
 
     // ── pencil2d_tests executable ────────────────────────────────────
@@ -138,6 +148,8 @@ fn configurePencil2d(
 
     // ── Embedded MCP server (separate object — has extern C deps) ────
     if (!is_test) {
+        const mcp_dep = b.dependency("mcp", .{ .target = mod.resolved_target, .optimize = mod.optimize });
+        const mcp_mod = mcp_dep.module("mcp");
         const mcp_lib = b.addObject(.{
             .name = "pencil2d_mcp_embedded",
             .root_module = b.createModule(.{
@@ -146,6 +158,7 @@ fn configurePencil2d(
                 .optimize = mod.optimize,
             }),
         });
+        mcp_lib.root_module.addImport("mcp", mcp_mod);
         mod.addObject(mcp_lib);
     }
 
