@@ -360,10 +360,13 @@ fn findQtToolDir(b: *std.Build, qt_prefix: []const u8, exe_ext: []const u8) []co
     };
     for (candidates) |dir| {
         const probe = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, dir, exe_ext });
+        // Try absolute access; for relative paths, resolve against build root
         if (std.fs.path.isAbsolute(probe)) {
             std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch continue;
         } else {
-            std.fs.cwd().access(probe, .{}) catch continue;
+            // Resolve relative to build root
+            const abs = b.pathFromRoot(probe);
+            std.Io.Dir.accessAbsolute(b.graph.io, abs, .{}) catch continue;
         }
         return dir;
     }
