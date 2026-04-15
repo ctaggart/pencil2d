@@ -274,16 +274,18 @@ fn configurePencil2d(
     if (qt_static) {
         // Static Qt: link .a/.lib archives directly
         const qt_lib = b.fmt("{s}/lib", .{qt_prefix});
+        const lib_prefix: []const u8 = if (is_win) "" else "lib";
+        const lib_ext: []const u8 = if (is_win) ".lib" else ".a";
 
         // Qt module archives
-        for (qt_static_libs) |lib| {
-            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}", .{ qt_lib, lib }) });
+        for (qt_static_module_names) |name| {
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}{s}{s}", .{ qt_lib, lib_prefix, name, lib_ext }) });
         }
 
         if (is_mac) {
             // Bundled third-party libs
-            for (qt_static_bundled_libs) |lib| {
-                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}", .{ qt_lib, lib }) });
+            for (qt_static_bundled_names) |name| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib{s}.a", .{ qt_lib, name }) });
             }
             // Platform plugin
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/libqcocoa.a", .{qt_prefix}) });
@@ -310,14 +312,31 @@ fn configurePencil2d(
             mod.linkSystemLibrary("z", .{});
             mod.linkSystemLibrary("resolv", .{});
         } else if (is_win) {
-            // TODO: Windows static Qt linking
+            // Bundled third-party libs
+            for (qt_static_bundled_names) |name| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}{s}", .{ qt_lib, name, lib_ext }) });
+            }
+            // Platform plugin
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/qwindows{s}", .{ qt_prefix, lib_ext }) });
+            // Image format plugins
+            for (qt_static_imageformat_win_plugins) |p| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/imageformats/{s}", .{ qt_prefix, p }) });
+            }
+            // SVG icon engine
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/iconengines/qsvgicon{s}", .{ qt_prefix, lib_ext }) });
+            // TLS backend for HTTPS
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/tls/qschannelbackend{s}", .{ qt_prefix, lib_ext }) });
+            // Windows system libraries
             for (win_system_libs) |lib| {
+                mod.linkSystemLibrary(lib, .{});
+            }
+            for (win_static_extra_libs) |lib| {
                 mod.linkSystemLibrary(lib, .{});
             }
         }
         // Static plugin import source (compiled only for static builds)
         mod.addCSourceFile(.{
-            .file = b.path("zig_src/qt_static_plugins.cpp"),
+            .file = b.path(if (is_mac) "zig_src/qt_static_plugins.cpp" else "zig_src/qt_static_plugins_win.cpp"),
             .flags = &.{"-std=c++17"},
         });
     } else if (is_win) {
@@ -518,23 +537,24 @@ const win_system_libs: []const []const u8 = &.{
 
 // ── Static Qt library lists ─────────────────────────────────────────
 
-const qt_static_libs: []const []const u8 = &.{
-    "libQt6Widgets.a",
-    "libQt6Gui.a",
-    "libQt6Multimedia.a",
-    "libQt6Svg.a",
-    "libQt6Xml.a",
-    "libQt6Network.a",
-    "libQt6DBus.a",
-    "libQt6Core.a",
+// Base names without prefix/extension (lib prefix and .a/.lib added per platform)
+const qt_static_module_names: []const []const u8 = &.{
+    "Qt6Widgets",
+    "Qt6Gui",
+    "Qt6Multimedia",
+    "Qt6Svg",
+    "Qt6Xml",
+    "Qt6Network",
+    "Qt6DBus",
+    "Qt6Core",
 };
 
-const qt_static_bundled_libs: []const []const u8 = &.{
-    "libQt6BundledHarfbuzz.a",
-    "libQt6BundledFreetype.a",
-    "libQt6BundledLibpng.a",
-    "libQt6BundledLibjpeg.a",
-    "libQt6BundledPcre2.a",
+const qt_static_bundled_names: []const []const u8 = &.{
+    "Qt6BundledHarfbuzz",
+    "Qt6BundledFreetype",
+    "Qt6BundledLibpng",
+    "Qt6BundledLibjpeg",
+    "Qt6BundledPcre2",
 };
 
 const qt_static_imageformat_plugins: []const []const u8 = &.{
@@ -592,6 +612,42 @@ const mac_static_frameworks: []const []const u8 = &.{
     "CoreMedia",
     "AudioUnit",
     "VideoToolbox",
+};
+
+const qt_static_imageformat_win_plugins: []const []const u8 = &.{
+    "qsvg.lib",
+    "qgif.lib",
+    "qico.lib",
+    "qjpeg.lib",
+    "qtiff.lib",
+    "qwebp.lib",
+};
+
+const win_static_extra_libs: []const []const u8 = &.{
+    "oleaut32",
+    "uuid",
+    "netapi32",
+    "userenv",
+    "winspool",
+    "comdlg32",
+    "dxgi",
+    "d3d11",
+    "dwrite",
+    "d2d1",
+    "mf",
+    "mfplat",
+    "mfuuid",
+    "mfreadwrite",
+    "evr",
+    "strmiids",
+    "crypt32",
+    "secur32",
+    "bcrypt",
+    "ncrypt",
+    "winhttp",
+    "setupapi",
+    "propsys",
+    "shlwapi",
 };
 
 const core_lib_sources: []const []const u8 = &.{
