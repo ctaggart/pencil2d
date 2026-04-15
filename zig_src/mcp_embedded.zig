@@ -294,8 +294,8 @@ fn buildLayerList(allocator: std.mem.Allocator, editor: ?*anyopaque) ![]const u8
     const count = qt_editor_layer_count(editor);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
-    var i: c_int = 0;
     try buf.append(allocator, '[');
+    var i: c_int = 0;
     while (i < count) : (i += 1) {
         var info: EditorLayerInfo = undefined;
         if (qt_editor_get_layer(editor, i, &info) != 0) continue;
@@ -308,12 +308,12 @@ fn buildLayerList(allocator: std.mem.Allocator, editor: ?*anyopaque) ![]const u8
             else => "unknown",
         };
         const name_len = std.mem.indexOfScalar(u8, &info.name, 0) orelse 255;
-        var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
-        aw.writer.print("{{\"index\":{d},\"id\":{d},\"name\":\"", .{ info.index, info.id }) catch return error.OutOfMemory;
-        aw.writer.writeAll(info.name[0..name_len]) catch return error.OutOfMemory;
-        aw.writer.print("\",\"type\":\"{s}\",\"visible\":{s},\"keyframes\":{d}}}", .{
+        const entry = std.fmt.allocPrint(allocator, "{{\"index\":{d},\"id\":{d},\"name\":\"{s}\",\"type\":\"{s}\",\"visible\":{s},\"keyframes\":{d}}}", .{
+            info.index, info.id, info.name[0..name_len],
             type_name, if (info.visible != 0) "true" else "false", info.keyframe_count,
         }) catch return error.OutOfMemory;
+        defer allocator.free(entry);
+        try buf.appendSlice(allocator, entry);
     }
     try buf.append(allocator, ']');
     return try allocator.dupe(u8, buf.items);
@@ -339,8 +339,9 @@ fn buildKeyframeList(allocator: std.mem.Allocator, args: ?std.json.Value, editor
     while (i < count) : (i += 1) {
         if (i > 0) try buf.append(allocator, ',');
         const idx: usize = @intCast(i);
-        var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
-        aw.writer.print("{{\"frame\":{d},\"length\":{d}}}", .{ kfs[idx].frame, kfs[idx].length }) catch return error.OutOfMemory;
+        const entry = std.fmt.allocPrint(allocator, "{{\"frame\":{d},\"length\":{d}}}", .{ kfs[idx].frame, kfs[idx].length }) catch return error.OutOfMemory;
+        defer allocator.free(entry);
+        try buf.appendSlice(allocator, entry);
     }
     try buf.append(allocator, ']');
     return try allocator.dupe(u8, buf.items);
