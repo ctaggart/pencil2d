@@ -7,8 +7,8 @@
             .hash = "zpix-0.1.0-N4OAh4NXAgBq_O8yToed0Kab1Lo729oY5bsg-h6ZTpxk",
         },
         .mcp = .{
-            .url = "git+https://github.com/cataggar/mcp.zig#9bf3c416039602628e6d7d15d2519f95e8021649",
-            .hash = "mcp-0.0.3-cIUFgyCAAwD-lYOHawj_lWGlYnOlW8M4CYDWpTqpyfCi",
+            .url = "git+https://github.com/cataggar/mcp.zig#7c21a853cc50195c373b979ba78aa0bffcb2e8ba",
+            .hash = "mcp-0.0.3-cIUFg96HAwBJV74dbjGh6pOw3GQE_xT8lTOW3b0GVdws",
         },
     },
     .paths = .{""},
