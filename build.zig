@@ -337,7 +337,7 @@ fn configurePencil2d(
         // Static plugin import source (compiled only for static builds)
         mod.addCSourceFile(.{
             .file = b.path(if (is_mac) "zig_src/qt_static_plugins.cpp" else "zig_src/qt_static_plugins_win.cpp"),
-            .flags = &.{"-std=c++17"},
+            .flags = cpp_flags,
         });
     } else if (is_win) {
         // Windows: link .lib import libraries directly
@@ -555,6 +555,7 @@ const qt_static_bundled_names: []const []const u8 = &.{
     "Qt6BundledLibpng",
     "Qt6BundledLibjpeg",
     "Qt6BundledPcre2",
+    "Qt6BundledZLIB",
 };
 
 const qt_static_imageformat_plugins: []const []const u8 = &.{
@@ -632,6 +633,7 @@ const win_static_extra_libs: []const []const u8 = &.{
     "comdlg32",
     "dxgi",
     "d3d11",
+    "d3d9",
     "dwrite",
     "d2d1",
     "mf",
@@ -648,6 +650,11 @@ const win_static_extra_libs: []const []const u8 = &.{
     "setupapi",
     "propsys",
     "shlwapi",
+    "shcore",
+    "iphlpapi",
+    "uiautomationcore",
+    "runtimeobject",
+    "wtsapi32",
 };
 
 const core_lib_sources: []const []const u8 = &.{
