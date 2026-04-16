@@ -287,7 +287,8 @@ fn configurePencil2d(
             for (qt_static_bundled_names) |name| {
                 const obj_path = b.fmt("{s}/lib{s}.a", .{ qt_lib, name });
                 // Only add bundled third-party lib if it exists in the Qt prefix
-                std.Io.Dir.accessAbsolute(b.graph.io, obj_path, .{}) catch continue;
+                const abs_path = if (std.fs.path.isAbsolute(obj_path)) obj_path else b.pathFromRoot(obj_path);
+                std.Io.Dir.accessAbsolute(b.graph.io, abs_path, .{}) catch continue;
                 mod.addObjectFile(.{ .cwd_relative = obj_path });
             }
             // Platform plugin
