@@ -285,7 +285,10 @@ fn configurePencil2d(
         if (is_mac) {
             // Bundled third-party libs
             for (qt_static_bundled_names) |name| {
-                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib{s}.a", .{ qt_lib, name }) });
+                const obj_path = b.fmt("{s}/lib{s}.a", .{ qt_lib, name });
+                // Only add bundled third-party lib if it exists in the Qt prefix
+                std.Io.Dir.accessAbsolute(b.graph.io, obj_path, .{}) catch continue;
+                mod.addObjectFile(.{ .cwd_relative = obj_path });
             }
             // Platform plugin
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/libqcocoa.a", .{qt_prefix}) });
