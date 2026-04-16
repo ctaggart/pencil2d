@@ -92,6 +92,9 @@ fn registerTools(server: *mcp.Server) !void {
     try server.addTool(.{ .name = "save_project", .description = "Save project to .pclx file (path: string)", .handler = saveProjectHandler });
     try server.addTool(.{ .name = "open_project", .description = "Open a .pclx file (path: string)", .handler = openProjectHandler });
     try server.addTool(.{ .name = "layer_reorder", .description = "Swap two layers (i, j: integer)", .handler = layerReorderHandler });
+
+    // Dev shutdown tool for stress testing.
+    try server.addTool(.{ .name = "server_shutdown", .description = "Shutdown server (dev only)", .handler = serverShutdownHandler });
 }
 
 // ── Tool handlers ────────────────────────────────────────────────────
@@ -224,6 +227,14 @@ fn layerReorderHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.
     const r = qt_editor_swap_layers(g_userdata, getInt(args, "i", 0), getInt(args, "j", 1));
     const text = std.fmt.allocPrint(allocator, "{{\"swapped\":{s}}}", .{if (r == 0) "true" else "false"}) catch return mcp.tools.ToolError.OutOfMemory;
     return mcp.tools.textResult(allocator, text) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn serverShutdownHandler(allocator: std.mem.Allocator, _: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    if (g_server) |*s| {
+        s.shutdown();
+        return mcp.tools.textResult(allocator, "{\"shutdown\":true}") catch return mcp.tools.ToolError.OutOfMemory;
+    }
+    return mcp.tools.textResult(allocator, "{\"shutdown\":false}") catch return mcp.tools.ToolError.OutOfMemory;
 }
 
 // ── C Bridge to Qt Editor ────────────────────────────────────────────
