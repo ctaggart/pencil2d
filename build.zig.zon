@@ -1,10 +1,14 @@
 .{
     .name = .pencil,
-    .version = "0.16.0-dev.2960+ce1f7136a",
+    .version = "0.16.0",
     .dependencies = .{
         .zpix = .{
             .url = "git+https://github.com/ctaggart/zpix#4abe8473c0b1c0c50fcff9b14d4c62a23705f45a",
             .hash = "zpix-0.1.0-N4OAh4NXAgBq_O8yToed0Kab1Lo729oY5bsg-h6ZTpxk",
+        },
+        .mcp = .{
+            .url = "git+https://github.com/cataggar/mcp.zig#7c21a853cc50195c373b979ba78aa0bffcb2e8ba",
+            .hash = "mcp-0.0.3-cIUFg96HAwBJV74dbjGh6pOw3GQE_xT8lTOW3b0GVdws",
         },
     },
     .paths = .{""},

@@ -18,7 +18,7 @@ This is a fork of [Pencil2D](https://www.pencil2d.org/) that ports the core engi
 
 ## Build
 
-Requires [Zig 0.16.0-dev](https://github.com/ctaggart/zig/releases) and Qt 6.8.
+Requires [Zig 0.16.0](https://ziglang.org/download/) and Qt 6.8.
 
 ```bash
 # Run Zig tests (no Qt needed)
@@ -35,13 +35,19 @@ On macOS, the build produces `zig-out/bin/Pencil2D Animation.app`.
 
 ## MCP Server
 
-Start Pencil2D with an embedded MCP server:
+Start Pencil2D with an embedded MCP server (Streamable HTTP):
 
 ```bash
 pencil2d --mcp 9876
 ```
 
-Connect via TCP on port 9876 using JSON-RPC 2.0 with Content-Length framing.
+Connect via HTTP on `http://localhost:9876/mcp` using JSON-RPC 2.0 POST requests.
+
+### Gemini CLI
+
+```bash
+gemini mcp add --transport http --trust pencil2d http://127.0.0.1:9876/mcp
+```
 
 ### Available Tools (21)
 
@@ -66,7 +72,7 @@ Connect via TCP on port 9876 using JSON-RPC 2.0 with Content-Length framing.
 |  - tools.zig (algorithms)         |
 |  - keyframe/layer/object.zig      |
 |  - pclx_file/xml/png.zig          |
-|  - mcp_embedded.zig (MCP TCP)     |
+|  - mcp_embedded.zig (MCP HTTP)     |
 |  - export/preferences/etc.        |
 +-----------------------------------+
 ```

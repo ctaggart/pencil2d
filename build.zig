@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
 
     const qt_prefix = b.option([]const u8, "qt-prefix", "Qt6 installation prefix") orelse
         "C:/Qt/6.8.2/msvc2022_64";
+    const qt_static = b.option(bool, "qt-static", "Link Qt statically") orelse false;
 
     const is_mac = @import("builtin").os.tag == .macos;
     const is_win = @import("builtin").os.tag == .windows;
@@ -20,6 +21,8 @@ pub fn build(b: *std.Build) void {
     // ── zpix dependency (PNG/JPEG image support) ─────────────────────
     const zpix_dep = b.dependency("zpix", .{ .target = target, .optimize = optimize });
     const zpix_mod = zpix_dep.module("zpix");
+
+    // mcp dependency is loaded below inside the `if (!is_test)` block.
 
     // ── pencil2d executable ──────────────────────────────────────────
     const exe = b.addExecutable(.{
@@ -32,21 +35,29 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (is_win) exe.subsystem = .Windows;
-    configurePencil2d(b, exe, qt_prefix, zpix_mod, false, is_mac, is_win);
+    configurePencil2d(b, exe, qt_prefix, zpix_mod, false, is_mac, is_win, qt_static);
     b.installArtifact(exe);
 
     // ── macOS .app bundle ────────────────────────────────────────────
     if (is_mac) {
         const app = "Pencil2D Animation.app/Contents";
         const install = b.getInstallStep();
-        // Executable symlink
-        install.dependOn(&b.addInstallBinFile(exe.getEmittedBin(), app ++ "/MacOS/pencil2d").step);
+        // Executable
+        const exe_install = b.addInstallBinFile(exe.getEmittedBin(), app ++ "/MacOS/pencil2d");
+        install.dependOn(&exe_install.step);
         // Info.plist
         install.dependOn(&b.addInstallBinFile(b.path("app/data/Info-zig.plist"), app ++ "/Info.plist").step);
         // Icons
         install.dependOn(&b.addInstallBinFile(b.path("app/data/pencil2d.icns"), app ++ "/Resources/pencil2d.icns").step);
         install.dependOn(&b.addInstallBinFile(b.path("app/data/icons/mac_pcl_icon.icns"), app ++ "/Resources/mac_pcl_icon.icns").step);
         install.dependOn(&b.addInstallBinFile(b.path("app/data/icons/mac_pclx_icon.icns"), app ++ "/Resources/mac_pclx_icon.icns").step);
+        // Ad-hoc code sign so macOS recognises the bundle icon
+        const codesign = b.addSystemCommand(&.{
+            "codesign", "--force", "--deep", "--sign", "-",
+            b.fmt("{s}/bin/Pencil2D Animation.app", .{b.install_path}),
+        });
+        codesign.step.dependOn(&exe_install.step);
+        install.dependOn(&codesign.step);
     }
 
     // ── pencil2d_tests executable ────────────────────────────────────
@@ -60,7 +71,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (is_win) tests_exe.subsystem = .Console;
-    configurePencil2d(b, tests_exe, qt_prefix, zpix_mod, true, is_mac, is_win);
+    configurePencil2d(b, tests_exe, qt_prefix, zpix_mod, true, is_mac, is_win, qt_static);
     b.installArtifact(tests_exe);
 
     // ── run steps ────────────────────────────────────────────────────
@@ -99,6 +110,7 @@ fn configurePencil2d(
     is_test: bool,
     is_mac: bool,
     is_win: bool,
+    qt_static: bool,
 ) void {
     const mod = exe.root_module;
 
@@ -138,6 +150,8 @@ fn configurePencil2d(
 
     // ── Embedded MCP server (separate object — has extern C deps) ────
     if (!is_test) {
+        const mcp_dep = b.dependency("mcp", .{ .target = mod.resolved_target, .optimize = mod.optimize });
+        const mcp_mod = mcp_dep.module("mcp");
         const mcp_lib = b.addObject(.{
             .name = "pencil2d_mcp_embedded",
             .root_module = b.createModule(.{
@@ -146,6 +160,7 @@ fn configurePencil2d(
                 .optimize = mod.optimize,
             }),
         });
+        mcp_lib.root_module.addImport("mcp", mcp_mod);
         mod.addObject(mcp_lib);
     }
 
@@ -161,7 +176,7 @@ fn configurePencil2d(
     }
 
     // ── Qt include paths ─────────────────────────────────────────────
-    if (is_mac) {
+    if (is_mac and !qt_static) {
         // macOS Homebrew Qt uses frameworks; add framework search path for linking
         // and explicit include paths for C++ compilation
         mod.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/lib", .{qt_prefix}) });
@@ -171,6 +186,7 @@ fn configurePencil2d(
             });
         }
     } else {
+        // Static Qt or non-macOS: flat include layout
         const qt_inc = b.fmt("{s}/include", .{qt_prefix});
         mod.addSystemIncludePath(.{ .cwd_relative = qt_inc });
         for (qt_modules) |qmod| {
@@ -189,7 +205,7 @@ fn configurePencil2d(
     // On macOS, Qt tools (moc/uic/rcc) need to find Qt frameworks at runtime.
     // When Qt is installed to a non-standard prefix (e.g. CI via aqtinstall),
     // we must set DYLD_FRAMEWORK_PATH so the tools can load their dependencies.
-    const qt_lib_dir: ?[]const u8 = if (is_mac) b.fmt("{s}/lib", .{qt_prefix}) else null;
+    const qt_lib_dir: ?[]const u8 = if (is_mac and !qt_static) b.fmt("{s}/lib", .{qt_prefix}) else null;
 
     // ── UIC: generate ui_*.h from .ui files ──────────────────────────
     const uic_path = b.fmt("{s}/{s}/uic{s}", .{ qt_prefix, qt_tool_dir, exe_ext });
@@ -255,7 +271,79 @@ fn configurePencil2d(
     }
 
     // ── Link Qt6 libraries ───────────────────────────────────────────
-    if (is_win) {
+    if (qt_static) {
+        // Static Qt: link .a/.lib archives directly
+        const qt_lib = b.fmt("{s}/lib", .{qt_prefix});
+        const lib_prefix: []const u8 = if (is_win) "" else "lib";
+        const lib_ext: []const u8 = if (is_win) ".lib" else ".a";
+
+        // Qt module archives
+        for (qt_static_module_names) |name| {
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}{s}{s}", .{ qt_lib, lib_prefix, name, lib_ext }) });
+        }
+
+        if (is_mac) {
+            // Bundled third-party libs
+            for (qt_static_bundled_names) |name| {
+                const obj_path = b.fmt("{s}/lib{s}.a", .{ qt_lib, name });
+                // Only add bundled third-party lib if it exists in the Qt prefix
+                const abs_path = if (std.fs.path.isAbsolute(obj_path)) obj_path else b.pathFromRoot(obj_path);
+                std.Io.Dir.accessAbsolute(b.graph.io, abs_path, .{}) catch continue;
+                mod.addObjectFile(.{ .cwd_relative = obj_path });
+            }
+            // Platform plugin
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/libqcocoa.a", .{qt_prefix}) });
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/styles/libqmacstyle.a", .{qt_prefix}) });
+            // Image format plugins
+            for (qt_static_imageformat_plugins) |p| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/imageformats/{s}", .{ qt_prefix, p }) });
+            }
+            // SVG icon engine
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/iconengines/libqsvgicon.a", .{qt_prefix}) });
+            // Multimedia backend
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/multimedia/libdarwinmediaplugin.a", .{qt_prefix}) });
+            // TLS backend for HTTPS
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/tls/libqsecuretransportbackend.a", .{qt_prefix}) });
+            // Resource object files (required by static Qt)
+            for (qt_static_mac_resource_objects) |obj| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/objects-Release/{s}", .{ qt_prefix, obj }) });
+            }
+            // macOS system frameworks
+            for (mac_static_frameworks) |fw| {
+                mod.linkFramework(fw, .{});
+            }
+            // System libraries
+            mod.linkSystemLibrary("z", .{});
+            mod.linkSystemLibrary("resolv", .{});
+        } else if (is_win) {
+            // Bundled third-party libs
+            for (qt_static_bundled_names) |name| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}{s}", .{ qt_lib, name, lib_ext }) });
+            }
+            // Platform plugin
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/qwindows{s}", .{ qt_prefix, lib_ext }) });
+            // Image format plugins
+            for (qt_static_imageformat_win_plugins) |p| {
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/imageformats/{s}", .{ qt_prefix, p }) });
+            }
+            // SVG icon engine
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/iconengines/qsvgicon{s}", .{ qt_prefix, lib_ext }) });
+            // TLS backend for HTTPS
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/tls/qschannelbackend{s}", .{ qt_prefix, lib_ext }) });
+            // Windows system libraries
+            for (win_system_libs) |lib| {
+                mod.linkSystemLibrary(lib, .{});
+            }
+            for (win_static_extra_libs) |lib| {
+                mod.linkSystemLibrary(lib, .{});
+            }
+        }
+        // Static plugin import source (compiled only for static builds)
+        mod.addCSourceFile(.{
+            .file = b.path(if (is_mac) "zig_src/qt_static_plugins.cpp" else "zig_src/qt_static_plugins_win.cpp"),
+            .flags = cpp_flags,
+        });
+    } else if (is_win) {
         // Windows: link .lib import libraries directly
         for (qt_link_libs) |lib| {
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/{s}.lib", .{ qt_prefix, lib }) });
@@ -265,7 +353,7 @@ fn configurePencil2d(
             mod.linkSystemLibrary(lib, .{});
         }
     } else if (is_mac) {
-        // macOS: link Qt frameworks
+        // macOS: link Qt frameworks (dynamic)
         mod.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/lib", .{qt_prefix}) });
         for (qt_framework_names) |fw| {
             mod.linkFramework(fw, .{});
@@ -290,17 +378,22 @@ fn configurePencil2d(
 fn findQtToolDir(b: *std.Build, qt_prefix: []const u8, exe_ext: []const u8) []const u8 {
     const candidates = [_][]const u8{
         "share/qt/libexec", // Homebrew Qt 6.11+
-        "libexec",          // aqtinstall on macOS
+        "libexec",          // aqtinstall on macOS / static Qt
         "bin",              // system Qt / Windows / Linux
     };
-    if (std.fs.path.isAbsolute(qt_prefix)) {
-        for (candidates) |dir| {
-            const probe = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, dir, exe_ext });
+    for (candidates) |dir| {
+        const probe = b.fmt("{s}/{s}/moc{s}", .{ qt_prefix, dir, exe_ext });
+        // Try absolute access; for relative paths, resolve against build root
+        if (std.fs.path.isAbsolute(probe)) {
             std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch continue;
-            return dir;
+        } else {
+            // Resolve relative to build root
+            const abs = b.pathFromRoot(probe);
+            std.Io.Dir.accessAbsolute(b.graph.io, abs, .{}) catch continue;
         }
+        return dir;
     }
-    // Fall back to "bin" if nothing found or prefix is not absolute.
+    // Fall back to "bin" if nothing found.
     return "bin";
 }
 
@@ -444,6 +537,128 @@ const win_system_libs: []const []const u8 = &.{
     "winmm",
     "version",
     "opengl32",
+};
+
+// ── Static Qt library lists ─────────────────────────────────────────
+
+// Base names without prefix/extension (lib prefix and .a/.lib added per platform)
+const qt_static_module_names: []const []const u8 = &.{
+    "Qt6Widgets",
+    "Qt6Gui",
+    "Qt6Multimedia",
+    "Qt6Svg",
+    "Qt6Xml",
+    "Qt6Network",
+    "Qt6DBus",
+    "Qt6Core",
+};
+
+const qt_static_bundled_names: []const []const u8 = &.{
+    "Qt6BundledHarfbuzz",
+    "Qt6BundledFreetype",
+    "Qt6BundledLibpng",
+    "Qt6BundledLibjpeg",
+    "Qt6BundledPcre2",
+    "Qt6BundledZLIB",
+};
+
+const qt_static_imageformat_plugins: []const []const u8 = &.{
+    "libqsvg.a",
+    "libqgif.a",
+    "libqico.a",
+    "libqjpeg.a",
+    "libqicns.a",
+    "libqmacheif.a",
+    "libqmacjp2.a",
+    "libqtiff.a",
+    "libqwebp.a",
+};
+
+const qt_static_mac_resource_objects: []const []const u8 = &.{
+    "Gui_resources_1/.qt/rcc/qrc_qpdf_init.cpp.o",
+    "Gui_resources_2/.qt/rcc/qrc_gui_shaders_init.cpp.o",
+    "Widgets_resources_1/.qt/rcc/qrc_qstyle_init.cpp.o",
+    "Widgets_resources_2/.qt/rcc/qrc_qstyle1_init.cpp.o",
+    "Widgets_resources_3/.qt/rcc/qrc_qstyle_fusion_init.cpp.o",
+    "Widgets_resources_4/.qt/rcc/qrc_qmessagebox_init.cpp.o",
+    "Multimedia_resources_1/.qt/rcc/qrc_qtmultimedia_shaders_init.cpp.o",
+    "Multimedia_resources_2/.qt/rcc/qrc_qtmultimedia_shaders_linear_init.cpp.o",
+    "Multimedia_resources_3/.qt/rcc/qrc_qtmultimedia_shaders_gl_macos_init.cpp.o",
+    "Multimedia_resources_4/.qt/rcc/qrc_qtmultimedia_shaders_gl_macos_linear_init.cpp.o",
+    "QCocoaIntegrationPlugin_resources_1/.qt/rcc/qrc_qcocoaresources_init.cpp.o",
+};
+
+const mac_static_frameworks: []const []const u8 = &.{
+    "Cocoa",
+    "IOKit",
+    "CoreGraphics",
+    "CoreText",
+    "Metal",
+    "AppKit",
+    "Carbon",
+    "OpenGL",
+    "ImageIO",
+    "QuartzCore",
+    "CoreFoundation",
+    "Foundation",
+    "DiskArbitration",
+    "ApplicationServices",
+    "CoreServices",
+    "Security",
+    "UniformTypeIdentifiers",
+    "CoreVideo",
+    "IOSurface",
+    "CFNetwork",
+    "SystemConfiguration",
+    "GSS",
+    "CoreAudio",
+    "AudioToolbox",
+    "AVFoundation",
+    "CoreMedia",
+    "AudioUnit",
+    "VideoToolbox",
+};
+
+const qt_static_imageformat_win_plugins: []const []const u8 = &.{
+    "qsvg.lib",
+    "qgif.lib",
+    "qico.lib",
+    "qjpeg.lib",
+    "qtiff.lib",
+    "qwebp.lib",
+};
+
+const win_static_extra_libs: []const []const u8 = &.{
+    "oleaut32",
+    "uuid",
+    "netapi32",
+    "userenv",
+    "winspool",
+    "comdlg32",
+    "dxgi",
+    "d3d11",
+    "d3d9",
+    "dwrite",
+    "d2d1",
+    "mf",
+    "mfplat",
+    "mfuuid",
+    "mfreadwrite",
+    "evr",
+    "strmiids",
+    "crypt32",
+    "secur32",
+    "bcrypt",
+    "ncrypt",
+    "winhttp",
+    "setupapi",
+    "propsys",
+    "shlwapi",
+    "shcore",
+    "iphlpapi",
+    "uiautomationcore",
+    "runtimeobject",
+    "wtsapi32",
 };
 
 const core_lib_sources: []const []const u8 = &.{
