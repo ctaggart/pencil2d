@@ -72,8 +72,6 @@ pub fn build(b: *std.Build) void {
     });
     if (is_win) tests_exe.subsystem = .Console;
     configurePencil2d(b, tests_exe, qt_prefix, zpix_mod, true, is_mac, is_win, qt_static);
-    b.installArtifact(tests_exe);
-
     // ── run steps ────────────────────────────────────────────────────
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -81,7 +79,6 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const test_cmd = b.addRunArtifact(tests_exe);
-    test_cmd.step.dependOn(b.getInstallStep());
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&test_cmd.step);
 
