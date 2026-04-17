@@ -35,6 +35,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (is_win) exe.subsystem = .Windows;
+    // Use mainCRTStartup to call int main(argc, argv) directly; avoids Qt6EntryPoint's
+    // WinMain/wWinMain which both appear in the single archive member and trigger an
+    // lld-link warning ("found both wWinMain and WinMain") that zig 0.16 treats as fatal.
+    if (is_win and qt_static) exe.entry = .{ .symbol_name = "mainCRTStartup" };
     configurePencil2d(b, exe, qt_prefix, zpix_mod, false, is_mac, is_win, qt_static);
     b.installArtifact(exe);
 
@@ -313,20 +317,29 @@ fn configurePencil2d(
             mod.linkSystemLibrary("z", .{});
             mod.linkSystemLibrary("resolv", .{});
         } else if (is_win) {
-            // Bundled third-party libs
+            // Bundled third-party libs (skip ones not present in this Qt build)
             for (qt_static_bundled_names) |name| {
-                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/{s}{s}", .{ qt_lib, name, lib_ext }) });
+                const obj_path = b.fmt("{s}/{s}{s}", .{ qt_lib, name, lib_ext });
+                std.Io.Dir.accessAbsolute(b.graph.io, obj_path, .{}) catch continue;
+                mod.addObjectFile(.{ .cwd_relative = obj_path });
             }
+            // No Qt6EntryPoint: we use mainCRTStartup which calls our int main() directly.
+            // Linking Qt6EntryPoint.lib pulls in a single archive member that defines BOTH
+            // WinMain and wWinMain, which trips an lld-link warning that zig 0.16 treats as fatal.
             // Platform plugin
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/qwindows{s}", .{ qt_prefix, lib_ext }) });
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/platforms/objects-Release/QWindowsIntegrationPlugin_init/QWindowsIntegrationPlugin_init.cpp.obj", .{qt_prefix}) });
             // Image format plugins
             for (qt_static_imageformat_win_plugins) |p| {
-                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/imageformats/{s}", .{ qt_prefix, p }) });
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/imageformats/{s}.lib", .{ qt_prefix, p.lib }) });
+                mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/imageformats/objects-Release/{s}_init/{s}_init.cpp.obj", .{ qt_prefix, p.init, p.init }) });
             }
             // SVG icon engine
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/iconengines/qsvgicon{s}", .{ qt_prefix, lib_ext }) });
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/iconengines/objects-Release/QSvgIconPlugin_init/QSvgIconPlugin_init.cpp.obj", .{qt_prefix}) });
             // TLS backend for HTTPS
             mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/tls/qschannelbackend{s}", .{ qt_prefix, lib_ext }) });
+            mod.addObjectFile(.{ .cwd_relative = b.fmt("{s}/plugins/tls/objects-Release/QSchannelBackendPlugin_init/QSchannelBackendPlugin_init.cpp.obj", .{qt_prefix}) });
             // Windows system libraries
             for (win_system_libs) |lib| {
                 mod.linkSystemLibrary(lib, .{});
@@ -557,6 +570,7 @@ const qt_static_bundled_names: []const []const u8 = &.{
     "Qt6BundledLibjpeg",
     "Qt6BundledPcre2",
     "Qt6BundledZLIB",
+    "Qt6BundledTLSF", // Qt 6.11+: tlsf allocator used by qmemory_resource_tlsf in Qt6Multimedia
 };
 
 const qt_static_imageformat_plugins: []const []const u8 = &.{
@@ -616,13 +630,14 @@ const mac_static_frameworks: []const []const u8 = &.{
     "VideoToolbox",
 };
 
-const qt_static_imageformat_win_plugins: []const []const u8 = &.{
-    "qsvg.lib",
-    "qgif.lib",
-    "qico.lib",
-    "qjpeg.lib",
-    "qtiff.lib",
-    "qwebp.lib",
+const QtImagePlugin = struct { lib: []const u8, init: []const u8 };
+const qt_static_imageformat_win_plugins: []const QtImagePlugin = &.{
+    .{ .lib = "qsvg", .init = "QSvgPlugin" },
+    .{ .lib = "qgif", .init = "QGifPlugin" },
+    .{ .lib = "qico", .init = "QICOPlugin" },
+    .{ .lib = "qjpeg", .init = "QJpegPlugin" },
+    .{ .lib = "qtiff", .init = "QTiffPlugin" },
+    .{ .lib = "qwebp", .init = "QWebpPlugin" },
 };
 
 const win_static_extra_libs: []const []const u8 = &.{
@@ -634,7 +649,9 @@ const win_static_extra_libs: []const []const u8 = &.{
     "comdlg32",
     "dxgi",
     "d3d11",
+    "d3d12", // Qt 6.11 RHI D3D12 backend
     "d3d9",
+    "dxguid", // GUIDs referenced by Qt 6.11 RHI D3D11/D3D12 (e.g. WKPDID_D3DDebugObjectName)
     "dwrite",
     "d2d1",
     "mf",
@@ -656,6 +673,10 @@ const win_static_extra_libs: []const []const u8 = &.{
     "uiautomationcore",
     "runtimeobject",
     "wtsapi32",
+    "avrt", // Qt 6.11 multimedia: AvSetMmThreadCharacteristics / AvSetMmThreadPriority
+    "synchronization", // Qt 6.11 Core: WaitOnAddress / WakeByAddress*
+    "authz", // Qt 6.11 Core: AuthzAccessCheck / AuthzInitializeResourceManager
+    "icu", // Windows 10+ unversioned ICU shim (ucnv_*, etc.) used by Qt 6.11 Core
 };
 
 const core_lib_sources: []const []const u8 = &.{
