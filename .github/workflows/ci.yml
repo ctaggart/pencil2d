@@ -42,12 +42,12 @@ jobs:
       - name: Download static Qt
         shell: pwsh
         run: |
-          curl -L https://github.com/ctaggart/qt5/releases/download/v6.8.3/qt-static-6.8.3-x86_64-windows-msvc.tar.xz -o qt-static.tar.xz
+          curl -L https://github.com/ctaggart/qt5/releases/download/v6.11.0/qt-static-6.11.0-x86_64-windows-msvc.tar.xz -o qt-static.tar.xz
           tar xf qt-static.tar.xz
 
       - name: Build Pencil2D
         shell: pwsh
-        run: zig build "-Dqt-prefix=qt-static-6.8.3-x86_64-windows-msvc" -Dqt-static=true
+        run: zig build "-Dqt-prefix=qt-static-6.11.0-x86_64-windows-msvc" -Dqt-static=true
 
   build-macos:
     runs-on: macos-latest
@@ -60,7 +60,7 @@ jobs:
           version: 0.16.0
 
       - name: Download static Qt
-        run: curl -L https://github.com/ctaggart/qt5/releases/download/v6.8.3/qt-static-6.8.3-aarch64-macos.tar.xz | tar xJ
+        run: curl -L https://github.com/ctaggart/qt5/releases/download/v6.11.0/qt-static-6.11.0-aarch64-macos.tar.xz | tar xJ
 
       - name: Build Pencil2D
-        run: zig build -Dqt-prefix="qt-static-6.8.3-aarch64-macos" -Dqt-static=true
+        run: zig build -Dqt-prefix="qt-static-6.11.0-aarch64-macos" -Dqt-static=true
