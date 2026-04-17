@@ -93,6 +93,24 @@ fn registerTools(server: *mcp.Server) !void {
     try server.addTool(.{ .name = "open_project", .description = "Open a .pclx file (path: string)", .handler = openProjectHandler });
     try server.addTool(.{ .name = "layer_reorder", .description = "Swap two layers (i, j: integer)", .handler = layerReorderHandler });
 
+    // Batch tools — let the model paint a whole frame (or many frames) in a single MCP call.
+    try server.addTool(.{
+        .name = "frame_paint",
+        .description = "Paint one frame in a single call. Args: layer (integer, default 0), frame (integer, default current; if >=1, navigates and ensures a keyframe exists), ops (array). " ++
+            "Each op is an object with an 'op' field plus per-op args. Supported ops: " ++
+            "'set_color' (r,g,b,a), 'line' (x0,y0,x1,y1, optional r,g,b,a,width), 'rect' (x,y,w,h, optional r,g,b,a), " ++
+            "'circle' (cx,cy,radius, optional r,g,b,a), 'fill' (x,y, optional r,g,b,a,tolerance), 'erase' (cx,cy,radius), 'clear'. " ++
+            "Color set by 'set_color' persists for subsequent ops within the call.",
+        .handler = framePaintHandler,
+    });
+    try server.addTool(.{
+        .name = "frames_paint",
+        .description = "Paint many frames in a single call. Args: layer (integer, default 0), frames (array). " ++
+            "Each frames[] entry is an object {frame: integer, ops: array} with the same op format as frame_paint. " ++
+            "For each entry the server navigates to the frame, ensures a keyframe, then runs ops in order.",
+        .handler = framesPaintHandler,
+    });
+
     // Dev shutdown tool for stress testing.
     try server.addTool(.{ .name = "server_shutdown", .description = "Shutdown server (dev only)", .handler = serverShutdownHandler });
 }
@@ -237,6 +255,174 @@ fn serverShutdownHandler(allocator: std.mem.Allocator, _: ?std.json.Value) mcp.t
     return mcp.tools.textResult(allocator, "{\"shutdown\":false}") catch return mcp.tools.ToolError.OutOfMemory;
 }
 
+// ── Batch handlers ───────────────────────────────────────────────────
+
+fn framePaintHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const editor = g_userdata;
+    const layer = getInt(args, "layer", 0);
+    const requested_frame = getInt(args, "frame", -1);
+    const frame: i32 = if (requested_frame >= 1) blk: {
+        _ = qt_editor_scrub_to(editor, requested_frame);
+        _ = qt_editor_add_keyframe(editor, layer, requested_frame);
+        break :blk requested_frame;
+    } else qt_editor_current_frame(editor);
+
+    const ops_array = getArray(args, "ops") orelse {
+        return mcp.tools.textResult(allocator, "{\"error\":\"missing ops array\"}") catch return mcp.tools.ToolError.OutOfMemory;
+    };
+
+    const result = executeOps(editor, layer, ops_array);
+
+    const text = std.fmt.allocPrint(
+        allocator,
+        "{{\"frame\":{d},\"layer\":{d},\"executed\":{d},\"failed\":{d}}}",
+        .{ frame, layer, result.executed, result.failed },
+    ) catch return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, text) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+fn framesPaintHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.tools.ToolError!mcp.tools.ToolResult {
+    const editor = g_userdata;
+    const layer = getInt(args, "layer", 0);
+
+    const frames_array = getArray(args, "frames") orelse {
+        return mcp.tools.textResult(allocator, "{\"error\":\"missing frames array\"}") catch return mcp.tools.ToolError.OutOfMemory;
+    };
+
+    var total_executed: usize = 0;
+    var total_failed: usize = 0;
+    var frames_processed: usize = 0;
+    var frames_skipped: usize = 0;
+
+    for (frames_array.items) |entry| {
+        if (entry != .object) {
+            frames_skipped += 1;
+            continue;
+        }
+        const frame = getInt(entry, "frame", -1);
+        if (frame < 1) {
+            frames_skipped += 1;
+            continue;
+        }
+        _ = qt_editor_scrub_to(editor, frame);
+        _ = qt_editor_add_keyframe(editor, layer, frame);
+        const ops_array = getArray(entry, "ops") orelse {
+            frames_skipped += 1;
+            continue;
+        };
+        const result = executeOps(editor, layer, ops_array);
+        total_executed += result.executed;
+        total_failed += result.failed;
+        frames_processed += 1;
+    }
+
+    const text = std.fmt.allocPrint(
+        allocator,
+        "{{\"layer\":{d},\"frames_processed\":{d},\"frames_skipped\":{d},\"executed\":{d},\"failed\":{d}}}",
+        .{ layer, frames_processed, frames_skipped, total_executed, total_failed },
+    ) catch return mcp.tools.ToolError.OutOfMemory;
+    return mcp.tools.textResult(allocator, text) catch return mcp.tools.ToolError.OutOfMemory;
+}
+
+const ExecResult = struct { executed: usize, failed: usize };
+
+fn executeOps(editor: ?*anyopaque, default_layer: i32, ops: std.json.Array) ExecResult {
+    var executed: usize = 0;
+    var failed: usize = 0;
+    for (ops.items) |op_v| {
+        if (op_v != .object) {
+            failed += 1;
+            continue;
+        }
+        const op_name_v = op_v.object.get("op") orelse {
+            failed += 1;
+            continue;
+        };
+        if (op_name_v != .string) {
+            failed += 1;
+            continue;
+        }
+        const op_name = op_name_v.string;
+        const op_layer = getInt(op_v, "layer", default_layer);
+
+        if (std.mem.eql(u8, op_name, "set_color")) {
+            _ = qt_editor_set_color(
+                editor,
+                getInt(op_v, "r", 0),
+                getInt(op_v, "g", 0),
+                getInt(op_v, "b", 0),
+                getInt(op_v, "a", 255),
+            );
+        } else if (std.mem.eql(u8, op_name, "line")) {
+            _ = qt_editor_draw_line(
+                editor,
+                op_layer,
+                getInt(op_v, "x0", 0),
+                getInt(op_v, "y0", 0),
+                getInt(op_v, "x1", 0),
+                getInt(op_v, "y1", 0),
+                getInt(op_v, "r", 0),
+                getInt(op_v, "g", 0),
+                getInt(op_v, "b", 0),
+                getInt(op_v, "a", 255),
+                getInt(op_v, "width", 2),
+            );
+        } else if (std.mem.eql(u8, op_name, "rect")) {
+            _ = qt_editor_draw_rect(
+                editor,
+                op_layer,
+                getInt(op_v, "x", 0),
+                getInt(op_v, "y", 0),
+                getInt(op_v, "w", 50),
+                getInt(op_v, "h", 50),
+                getInt(op_v, "r", 0),
+                getInt(op_v, "g", 0),
+                getInt(op_v, "b", 0),
+                getInt(op_v, "a", 255),
+            );
+        } else if (std.mem.eql(u8, op_name, "circle")) {
+            _ = qt_editor_draw_circle(
+                editor,
+                op_layer,
+                getInt(op_v, "cx", 0),
+                getInt(op_v, "cy", 0),
+                getInt(op_v, "radius", 25),
+                getInt(op_v, "r", 0),
+                getInt(op_v, "g", 0),
+                getInt(op_v, "b", 0),
+                getInt(op_v, "a", 255),
+            );
+        } else if (std.mem.eql(u8, op_name, "fill")) {
+            _ = qt_editor_flood_fill(
+                editor,
+                op_layer,
+                getInt(op_v, "x", 0),
+                getInt(op_v, "y", 0),
+                getInt(op_v, "r", 0),
+                getInt(op_v, "g", 0),
+                getInt(op_v, "b", 0),
+                getInt(op_v, "a", 255),
+                getInt(op_v, "tolerance", 32),
+            );
+        } else if (std.mem.eql(u8, op_name, "erase")) {
+            _ = qt_editor_erase(
+                editor,
+                op_layer,
+                getInt(op_v, "cx", 0),
+                getInt(op_v, "cy", 0),
+                getInt(op_v, "radius", 10),
+            );
+        } else if (std.mem.eql(u8, op_name, "clear")) {
+            _ = qt_editor_clear_frame(editor, op_layer);
+        } else {
+            failed += 1;
+            continue;
+        }
+        executed += 1;
+    }
+    return .{ .executed = executed, .failed = failed };
+}
+
 // ── C Bridge to Qt Editor ────────────────────────────────────────────
 
 const EditorLayerInfo = extern struct {
@@ -297,6 +483,13 @@ fn getStr(args: ?std.json.Value, key: []const u8) ?[]const u8 {
     const o = obj orelse return null;
     const v = o.get(key) orelse return null;
     return if (v == .string) v.string else null;
+}
+
+fn getArray(args: ?std.json.Value, key: []const u8) ?std.json.Array {
+    const obj = if (args) |a| (if (a == .object) &a.object else null) else null;
+    const o = obj orelse return null;
+    const v = o.get(key) orelse return null;
+    return if (v == .array) v.array else null;
 }
 
 // ── List builders ────────────────────────────────────────────────────
