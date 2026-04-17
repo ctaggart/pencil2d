@@ -17,4 +17,4 @@ Q_IMPORT_PLUGIN(QWebpPlugin)
 Q_IMPORT_PLUGIN(QSvgIconPlugin)
 
 // TLS backend for HTTPS
-Q_IMPORT_PLUGIN(QSchannelBackendPlugin)
+Q_IMPORT_PLUGIN(QSchannelBackend)
